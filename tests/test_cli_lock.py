@@ -95,12 +95,12 @@ def test_configure_logging_rotates_weekly_and_keeps_old_logs(tmp_path: Path) -> 
             logger.removeHandler(handler)
 
 
-def test_configure_logging_prefers_shared_logfile_path(tmp_path: Path) -> None:
-    """Verify runtime logging writes to the shared configured logfile."""
+def test_configure_logging_uses_module_specific_logfile(tmp_path: Path) -> None:
+    """Verify runtime logging writes to one logfile per module."""
 
-    logfile_path = tmp_path / "shared.log"
+    log_dir = tmp_path / "logs"
     config = _config(log_dir=str(tmp_path / "ignored"))
-    config["logfile"] = str(logfile_path)
+    config["logfile"] = str(log_dir / "ignored.log")
 
     logger = configure_logging(
         module_name="test-shared-logfile",
@@ -108,7 +108,7 @@ def test_configure_logging_prefers_shared_logfile_path(tmp_path: Path) -> None:
     )
     try:
         file_handler = next(handler for handler in logger.handlers if isinstance(handler, TimedRotatingFileHandler))
-        assert Path(file_handler.baseFilename) == logfile_path
+        assert Path(file_handler.baseFilename) == log_dir / "test-shared-logfile.log"
     finally:
         for handler in list(logger.handlers):
             handler.close()

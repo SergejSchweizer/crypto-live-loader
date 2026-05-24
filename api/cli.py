@@ -15,6 +15,12 @@ from typing import cast
 from api.constants import (
     BRONZE_BUILDER_COMMAND,
     GOLD_BUILDER_COMMAND,
+    INDEX_PRICE_BRONZE_BUILDER_COMMAND,
+    INDEX_PRICE_GOLD_BUILDER_COMMAND,
+    INDEX_PRICE_SILVER_BUILDER_COMMAND,
+    INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
+    INSTRUMENT_METADATA_GOLD_BUILDER_COMMAND,
+    INSTRUMENT_METADATA_SILVER_BUILDER_COMMAND,
     LEGACY_BRONZE_BUILDER_COMMAND,
     LEGACY_GOLD_BUILDER_COMMAND,
     LEGACY_SILVER_BUILDER_COMMAND,
@@ -40,6 +46,36 @@ from ingestion.config import (
     load_config,
 )
 from ingestion.gold import transform_l2_silver_to_gold
+from ingestion.index_price import (
+    INDEX_PRICE_DATASET_TYPE,
+    INDEX_PRICE_SCHEMA_VERSION,
+    INDEX_PRICE_SOURCE,
+    IndexPriceSnapshotRow,
+    normalize_index_price_snapshot_row,
+)
+from ingestion.index_price import (
+    snapshot_time_floor_minute as index_snapshot_time_floor_minute,
+)
+from ingestion.index_price import (
+    utc_run_id as index_utc_run_id,
+)
+from ingestion.index_price_gold import transform_index_price_silver_to_gold
+from ingestion.index_price_lake import save_index_price_snapshot_parquet_lake
+from ingestion.index_price_silver import transform_index_price_bronze_to_silver
+from ingestion.instrument_metadata import (
+    INSTRUMENT_METADATA_DATASET_TYPE,
+    INSTRUMENT_METADATA_SCHEMA_VERSION,
+    INSTRUMENT_METADATA_SOURCE,
+    InstrumentMetadataSnapshotRow,
+    normalize_instrument_metadata_rows,
+    snapshot_date_utc,
+)
+from ingestion.instrument_metadata import (
+    utc_run_id as instrument_utc_run_id,
+)
+from ingestion.instrument_metadata_gold import transform_instrument_metadata_silver_to_gold
+from ingestion.instrument_metadata_lake import save_instrument_metadata_snapshot_parquet_lake
+from ingestion.instrument_metadata_silver import transform_instrument_metadata_bronze_to_silver
 from ingestion.l2 import L2Snapshot, fetch_l2_snapshots_for_symbols
 from ingestion.lake import save_l2_snapshot_parquet_lake
 from ingestion.options import (
@@ -55,6 +91,8 @@ from ingestion.options_gold import transform_option_silver_to_gold
 from ingestion.options_lake import save_option_ticker_snapshot_parquet_lake
 from ingestion.options_silver import transform_option_bronze_to_silver
 from ingestion.silver import transform_l2_bronze_to_silver
+from sources.deribit_index_price import fetch_index_price
+from sources.deribit_instruments import fetch_instruments
 from sources.deribit_options import (
     fetch_option_book_summary_rows,
     resolve_options_currency_request,
@@ -65,6 +103,8 @@ __all__ = ["build_parser", "main"]
 
 SnapshotsBySymbol = dict[str, list[L2Snapshot]]
 OptionRowsByCurrency = dict[str, list[OptionTickerSnapshotRow]]
+InstrumentMetadataRowsByDate = dict[str, list[InstrumentMetadataSnapshotRow]]
+IndexPriceRowsBySymbol = dict[str, list[IndexPriceSnapshotRow]]
 
 
 def _boolean_optional_flag(
@@ -193,6 +233,231 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=config_bool(options_config, "json_output", config_bool(ingestion_config, "json_output", True)),
         help="Print JSON output",
+    )
+
+    instrument_metadata_config = config_section(ingestion_config, "instrument_metadata")
+    instrument_metadata_parser = subparsers.add_parser(
+        INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
+        help="Fetch Deribit instrument metadata snapshots and persist raw rows to the bronze parquet lake",
+    )
+    instrument_metadata_parser.add_argument(
+        "--symbols",
+        "--currencies",
+        dest="currencies",
+        nargs="+",
+        default=config_str_list(instrument_metadata_config, "currencies", ["BTC", "ETH", "SOL"]),
+        type=str,
+        help="Base symbols/currencies to fetch instrument metadata for",
+    )
+    instrument_metadata_parser.add_argument(
+        "--kind",
+        default=config_str(instrument_metadata_config, "kind", "option"),
+        help="Deribit instrument kind filter, for example option or future",
+    )
+    _boolean_optional_flag(
+        instrument_metadata_parser,
+        "include-inactive",
+        config_bool(instrument_metadata_config, "include_inactive", False),
+        "Include expired/inactive instruments from Deribit",
+    )
+    instrument_metadata_parser.add_argument(
+        "--lake-root",
+        default=config_str(instrument_metadata_config, "lake_root", "lake/bronze"),
+        help="Root directory for parquet lake files",
+    )
+    _boolean_optional_flag(
+        instrument_metadata_parser,
+        "save-parquet-lake",
+        config_bool(instrument_metadata_config, "save_parquet_lake", True),
+        "Save raw instrument metadata rows to bronze parquet lake partitions",
+    )
+    instrument_metadata_parser.add_argument(
+        "--schema-version",
+        default=config_str(instrument_metadata_config, "schema_version", INSTRUMENT_METADATA_SCHEMA_VERSION),
+        help="Schema version tag to annotate each normalized row",
+    )
+    instrument_metadata_parser.add_argument(
+        "--source",
+        default=config_str(instrument_metadata_config, "source", INSTRUMENT_METADATA_SOURCE),
+        help="Source identifier written to bronze rows",
+    )
+    _boolean_optional_flag(
+        instrument_metadata_parser,
+        "json-output",
+        config_bool(instrument_metadata_config, "json_output", config_bool(ingestion_config, "json_output", True)),
+        "Print JSON output",
+    )
+
+    index_price_config = config_section(ingestion_config, "index_price")
+    index_price_parser = subparsers.add_parser(
+        INDEX_PRICE_BRONZE_BUILDER_COMMAND,
+        help="Fetch Deribit index prices and persist minutely raw rows to the bronze parquet lake",
+    )
+    index_price_parser.add_argument(
+        "--symbols",
+        nargs="+",
+        default=config_str_list(index_price_config, "symbols", ["btc_usd", "eth_usd", "sol_usdc"]),
+        type=str,
+        help="Deribit index names to fetch, separated by spaces or commas",
+    )
+    index_price_parser.add_argument(
+        "--lake-root",
+        default=config_str(index_price_config, "lake_root", "lake/bronze"),
+        help="Root directory for parquet lake files",
+    )
+    _boolean_optional_flag(
+        index_price_parser,
+        "save-parquet-lake",
+        config_bool(index_price_config, "save_parquet_lake", True),
+        "Save raw index price rows to bronze parquet lake partitions",
+    )
+    index_price_parser.add_argument(
+        "--source",
+        default=config_str(index_price_config, "source", INDEX_PRICE_SOURCE),
+        help="Source identifier written to bronze rows",
+    )
+    index_price_parser.add_argument(
+        "--schema-version",
+        default=config_str(index_price_config, "schema_version", INDEX_PRICE_SCHEMA_VERSION),
+        help="Schema version tag to annotate each normalized row",
+    )
+    _boolean_optional_flag(
+        index_price_parser,
+        "json-output",
+        config_bool(index_price_config, "json_output", config_bool(ingestion_config, "json_output", True)),
+        "Print JSON output",
+    )
+
+    instrument_metadata_silver_parser = subparsers.add_parser(
+        INSTRUMENT_METADATA_SILVER_BUILDER_COMMAND,
+        help="Transform bronze instrument metadata snapshots into silver daily features",
+    )
+    instrument_metadata_silver_parser.add_argument(
+        "--bronze-lake-root",
+        default=config_str(instrument_metadata_config, "lake_root", "lake/bronze"),
+        help="Root directory for bronze parquet input files",
+    )
+    instrument_metadata_silver_parser.add_argument(
+        "--silver-lake-root",
+        default=config_str(ingestion_config, "silver_lake_root", "lake/silver"),
+        help="Root directory for silver output artifact files",
+    )
+    _boolean_optional_flag(
+        instrument_metadata_silver_parser,
+        "json-output",
+        config_bool(instrument_metadata_config, "json_output", config_bool(ingestion_config, "json_output", True)),
+        "Print JSON output",
+    )
+
+    index_price_silver_parser = subparsers.add_parser(
+        INDEX_PRICE_SILVER_BUILDER_COMMAND,
+        help="Transform bronze index price snapshots into silver minute features",
+    )
+    index_price_silver_parser.add_argument(
+        "--bronze-lake-root",
+        default=config_str(index_price_config, "lake_root", "lake/bronze"),
+        help="Root directory for bronze parquet input files",
+    )
+    index_price_silver_parser.add_argument(
+        "--silver-lake-root",
+        default=config_str(ingestion_config, "silver_lake_root", "lake/silver"),
+        help="Root directory for silver output artifact files",
+    )
+    _boolean_optional_flag(
+        index_price_silver_parser,
+        "json-output",
+        config_bool(index_price_config, "json_output", config_bool(ingestion_config, "json_output", True)),
+        "Print JSON output",
+    )
+
+    instrument_metadata_gold_parser = subparsers.add_parser(
+        INSTRUMENT_METADATA_GOLD_BUILDER_COMMAND,
+        help="Transform silver instrument metadata features into gold daily summaries",
+    )
+    instrument_metadata_gold_parser.add_argument(
+        "--silver-lake-root",
+        default=config_str(ingestion_config, "silver_lake_root", "lake/silver"),
+        help="Root directory for silver parquet input files",
+    )
+    instrument_metadata_gold_parser.add_argument(
+        "--gold-lake-root",
+        default=config_str(ingestion_config, "gold_lake_root", "lake/gold"),
+        help="Root directory for gold artifact output files",
+    )
+    _boolean_optional_flag(
+        instrument_metadata_gold_parser,
+        "plot",
+        True,
+        "Enable or suppress Gold PNG profile generation",
+    )
+    _boolean_optional_flag(
+        instrument_metadata_gold_parser,
+        "manifest",
+        True,
+        "Enable or suppress Gold JSON metadata manifest generation",
+    )
+    _boolean_optional_flag(
+        instrument_metadata_gold_parser,
+        "fill-missing-minutes",
+        False,
+        "Enable or disable Gold missing-minute filling mode",
+    )
+    instrument_metadata_gold_parser.add_argument(
+        "--fill-policy",
+        choices=["neighbor", "hybrid", "kalman"],
+        default="neighbor",
+        help="Gap-filling policy used when --fill-missing-minutes is enabled",
+    )
+    _boolean_optional_flag(
+        instrument_metadata_gold_parser,
+        "json-output",
+        config_bool(instrument_metadata_config, "json_output", config_bool(ingestion_config, "json_output", True)),
+        "Print JSON output",
+    )
+
+    index_price_gold_parser = subparsers.add_parser(
+        INDEX_PRICE_GOLD_BUILDER_COMMAND,
+        help="Transform silver index price features into gold minute aggregates",
+    )
+    index_price_gold_parser.add_argument(
+        "--silver-lake-root",
+        default=config_str(ingestion_config, "silver_lake_root", "lake/silver"),
+        help="Root directory for silver parquet input files",
+    )
+    index_price_gold_parser.add_argument(
+        "--gold-lake-root",
+        default=config_str(ingestion_config, "gold_lake_root", "lake/gold"),
+        help="Root directory for gold artifact output files",
+    )
+    _boolean_optional_flag(
+        index_price_gold_parser,
+        "plot",
+        True,
+        "Enable or suppress Gold PNG profile generation",
+    )
+    _boolean_optional_flag(
+        index_price_gold_parser,
+        "manifest",
+        True,
+        "Enable or suppress Gold JSON metadata manifest generation",
+    )
+    _boolean_optional_flag(
+        index_price_gold_parser,
+        "fill-missing-minutes",
+        False,
+        "Enable or disable Gold missing-minute filling mode",
+    )
+    index_price_gold_parser.add_argument(
+        "--fill-policy",
+        choices=["neighbor", "hybrid", "kalman"],
+        default="neighbor",
+        help="Gap-filling policy used when --fill-missing-minutes is enabled",
+    )
+    _boolean_optional_flag(
+        index_price_gold_parser,
+        "json-output",
+        config_bool(index_price_config, "json_output", config_bool(ingestion_config, "json_output", True)),
+        "Print JSON output",
     )
     options_silver_parser = subparsers.add_parser(
         OPTIONS_SILVER_BUILDER_COMMAND,
@@ -432,6 +697,17 @@ def _normalize_cli_currencies(values: list[str]) -> list[str]:
     if not currencies:
         raise ValueError("at least one currency is required")
     return currencies
+
+
+def _normalize_cli_index_symbols(values: list[str]) -> list[str]:
+    """Normalize CLI index-symbol values from space- or comma-delimited inputs."""
+
+    symbols: list[str] = []
+    for value in values:
+        symbols.extend(item.strip().lower() for item in value.replace(",", " ").split() if item.strip())
+    if not symbols:
+        raise ValueError("at least one index symbol is required")
+    return symbols
 
 
 def _emit_json_output(enabled: bool, payload: Mapping[str, object]) -> None:
@@ -740,6 +1016,257 @@ def _run_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger
     )
 
 
+def _run_instrument_metadata_bronze_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """Run Deribit instrument metadata snapshot collection and optional persistence."""
+
+    started_at = perf_counter()
+    currencies = _normalize_cli_currencies(cast(list[str], args.currencies))
+    kind = cast(str, args.kind).strip().lower()
+    include_inactive = bool(args.include_inactive)
+    run_id = instrument_utc_run_id()
+    ingested_at = datetime.now(UTC)
+    snapshot_date = snapshot_date_utc()
+
+    raw_rows: list[dict[str, object]] = []
+    fetch_errors: list[str] = []
+    for currency in currencies:
+        try:
+            raw_rows.extend(fetch_instruments(currency=currency, kind=kind, expired=include_inactive))
+        except Exception as exc:  # noqa: BLE001
+            fetch_errors.append(f"{currency}: {exc}")
+
+    rows, normalize_errors = normalize_instrument_metadata_rows(
+        raw_rows,
+        run_id=run_id,
+        snapshot_date=snapshot_date,
+        ingested_at=ingested_at,
+        source=cast(str, args.source),
+        schema_version=cast(str, args.schema_version),
+    )
+    rows_by_date: InstrumentMetadataRowsByDate = {snapshot_date.isoformat(): rows}
+    output_files: list[str] = []
+    if bool(args.save_parquet_lake):
+        output_files = save_instrument_metadata_snapshot_parquet_lake(
+            rows_by_date=rows_by_date,
+            lake_root=cast(str, args.lake_root),
+        )
+
+    output = {
+        "command": INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
+        "exchange": "deribit",
+        "dataset_type": INSTRUMENT_METADATA_DATASET_TYPE,
+        "run_id": run_id,
+        "snapshot_date": snapshot_date.isoformat(),
+        "requested_currencies": currencies,
+        "kind": kind,
+        "include_inactive": include_inactive,
+        "rows_written": len(rows),
+        "output_files": output_files,
+        "errors": fetch_errors + normalize_errors,
+    }
+    _emit_json_output(bool(args.json_output), output)
+    logger.info(
+        "instrument-metadata-bronze-builder run summary run_id=%s snapshot_date=%s currencies=%s kind=%s rows=%s "
+        "files=%s errors=%s elapsed_s=%.3f",
+        run_id,
+        snapshot_date.isoformat(),
+        ",".join(currencies),
+        kind,
+        len(rows),
+        len(output_files),
+        len(fetch_errors) + len(normalize_errors),
+        perf_counter() - started_at,
+    )
+
+
+def _run_index_price_bronze_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """Run Deribit index-price snapshot collection and optional persistence."""
+
+    started_at = perf_counter()
+    symbols = _normalize_cli_index_symbols(cast(list[str], args.symbols))
+    run_id = index_utc_run_id()
+    ingested_at = datetime.now(UTC)
+    snapshot_time = index_snapshot_time_floor_minute()
+
+    rows_by_symbol: IndexPriceRowsBySymbol = {}
+    errors: list[str] = []
+    for symbol in symbols:
+        try:
+            price = fetch_index_price(symbol)
+            row = normalize_index_price_snapshot_row(
+                index_name=symbol,
+                price=price,
+                run_id=run_id,
+                snapshot_time=snapshot_time,
+                ingested_at=ingested_at,
+                source=cast(str, args.source),
+                schema_version=cast(str, args.schema_version),
+            )
+            rows_by_symbol[symbol] = [row]
+        except Exception as exc:  # noqa: BLE001
+            rows_by_symbol[symbol] = []
+            errors.append(f"{symbol}: {exc}")
+
+    output_files: list[str] = []
+    if bool(args.save_parquet_lake):
+        output_files = save_index_price_snapshot_parquet_lake(
+            rows_by_index=rows_by_symbol,
+            lake_root=cast(str, args.lake_root),
+        )
+
+    output = {
+        "command": INDEX_PRICE_BRONZE_BUILDER_COMMAND,
+        "exchange": "deribit",
+        "dataset_type": INDEX_PRICE_DATASET_TYPE,
+        "run_id": run_id,
+        "snapshot_time": snapshot_time.isoformat().replace("+00:00", "Z"),
+        "requested_symbols": symbols,
+        "rows_written": sum(len(rows) for rows in rows_by_symbol.values()),
+        "output_files": output_files,
+        "errors": errors,
+    }
+    _emit_json_output(bool(args.json_output), output)
+    logger.info(
+        "index-price-bronze-builder run summary run_id=%s snapshot_time=%s symbols=%s rows=%s files=%s errors=%s "
+        "elapsed_s=%.3f",
+        run_id,
+        output["snapshot_time"],
+        ",".join(symbols),
+        output["rows_written"],
+        len(output_files),
+        len(errors),
+        perf_counter() - started_at,
+    )
+
+
+def _run_instrument_metadata_silver_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """Run Bronze-to-Silver instrument metadata transformation."""
+
+    started_at = perf_counter()
+    bronze_lake_root = cast(str, args.bronze_lake_root)
+    silver_lake_root = cast(str, args.silver_lake_root)
+    written_files = transform_instrument_metadata_bronze_to_silver(
+        bronze_lake_root=bronze_lake_root,
+        silver_lake_root=silver_lake_root,
+    )
+    output = {
+        "command": INSTRUMENT_METADATA_SILVER_BUILDER_COMMAND,
+        "status": "complete",
+        "bronze_lake_root": bronze_lake_root,
+        "silver_lake_root": silver_lake_root,
+        "artifact_files": written_files,
+    }
+    _emit_json_output(bool(args.json_output), output)
+    logger.info(
+        "instrument-metadata-silver-builder run summary status=complete elapsed_s=%.3f bronze_lake_root=%s "
+        "silver_lake_root=%s artifact_files=%s",
+        perf_counter() - started_at,
+        bronze_lake_root,
+        silver_lake_root,
+        len(written_files),
+    )
+
+
+def _run_index_price_silver_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """Run Bronze-to-Silver index price transformation."""
+
+    started_at = perf_counter()
+    bronze_lake_root = cast(str, args.bronze_lake_root)
+    silver_lake_root = cast(str, args.silver_lake_root)
+    written_files = transform_index_price_bronze_to_silver(
+        bronze_lake_root=bronze_lake_root,
+        silver_lake_root=silver_lake_root,
+    )
+    output = {
+        "command": INDEX_PRICE_SILVER_BUILDER_COMMAND,
+        "status": "complete",
+        "bronze_lake_root": bronze_lake_root,
+        "silver_lake_root": silver_lake_root,
+        "artifact_files": written_files,
+    }
+    _emit_json_output(bool(args.json_output), output)
+    logger.info(
+        "index-price-silver-builder run summary status=complete elapsed_s=%.3f bronze_lake_root=%s "
+        "silver_lake_root=%s artifact_files=%s",
+        perf_counter() - started_at,
+        bronze_lake_root,
+        silver_lake_root,
+        len(written_files),
+    )
+
+
+def _run_instrument_metadata_gold_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """Run Silver-to-Gold instrument metadata summary transformation."""
+
+    started_at = perf_counter()
+    silver_lake_root = cast(str, args.silver_lake_root)
+    gold_lake_root = cast(str, args.gold_lake_root)
+    written_files = transform_instrument_metadata_silver_to_gold(
+        silver_lake_root=silver_lake_root,
+        gold_lake_root=gold_lake_root,
+        plot=bool(args.plot),
+        manifest=bool(args.manifest),
+        fill_missing_minutes=bool(args.fill_missing_minutes),
+        fill_policy=cast(str, args.fill_policy),
+    )
+    output = {
+        "command": INSTRUMENT_METADATA_GOLD_BUILDER_COMMAND,
+        "status": "complete",
+        "silver_lake_root": silver_lake_root,
+        "gold_lake_root": gold_lake_root,
+        "fill_missing_minutes": bool(args.fill_missing_minutes),
+        "fill_policy": cast(str, args.fill_policy),
+        "artifact_files": written_files,
+    }
+    _emit_json_output(bool(args.json_output), output)
+    logger.info(
+        "instrument-metadata-gold-builder run summary status=complete elapsed_s=%.3f silver_lake_root=%s "
+        "gold_lake_root=%s fill_missing_minutes=%s fill_policy=%s artifact_files=%s",
+        perf_counter() - started_at,
+        silver_lake_root,
+        gold_lake_root,
+        bool(args.fill_missing_minutes),
+        cast(str, args.fill_policy),
+        len(written_files),
+    )
+
+
+def _run_index_price_gold_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """Run Silver-to-Gold index price transformation."""
+
+    started_at = perf_counter()
+    silver_lake_root = cast(str, args.silver_lake_root)
+    gold_lake_root = cast(str, args.gold_lake_root)
+    written_files = transform_index_price_silver_to_gold(
+        silver_lake_root=silver_lake_root,
+        gold_lake_root=gold_lake_root,
+        plot=bool(args.plot),
+        manifest=bool(args.manifest),
+        fill_missing_minutes=bool(args.fill_missing_minutes),
+        fill_policy=cast(str, args.fill_policy),
+    )
+    output = {
+        "command": INDEX_PRICE_GOLD_BUILDER_COMMAND,
+        "status": "complete",
+        "silver_lake_root": silver_lake_root,
+        "gold_lake_root": gold_lake_root,
+        "fill_missing_minutes": bool(args.fill_missing_minutes),
+        "fill_policy": cast(str, args.fill_policy),
+        "artifact_files": written_files,
+    }
+    _emit_json_output(bool(args.json_output), output)
+    logger.info(
+        "index-price-gold-builder run summary status=complete elapsed_s=%.3f silver_lake_root=%s "
+        "gold_lake_root=%s fill_missing_minutes=%s fill_policy=%s artifact_files=%s",
+        perf_counter() - started_at,
+        silver_lake_root,
+        gold_lake_root,
+        bool(args.fill_missing_minutes),
+        cast(str, args.fill_policy),
+        len(written_files),
+    )
+
+
 def _run_options_silver_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
     """Run Bronze-to-Silver option chain transformation."""
 
@@ -961,8 +1488,20 @@ def main() -> None:
         _run_bronze_builder(args=args, logger=logger, config=config)
     elif args.command == OPTIONS_BRONZE_BUILDER_COMMAND:
         _run_options_bronze_builder(args=args, logger=logger, config=config)
+    elif args.command == INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND:
+        _run_instrument_metadata_bronze_builder(args=args, logger=logger)
+    elif args.command == INDEX_PRICE_BRONZE_BUILDER_COMMAND:
+        _run_index_price_bronze_builder(args=args, logger=logger)
+    elif args.command == INSTRUMENT_METADATA_SILVER_BUILDER_COMMAND:
+        _run_instrument_metadata_silver_builder(args=args, logger=logger)
+    elif args.command == INDEX_PRICE_SILVER_BUILDER_COMMAND:
+        _run_index_price_silver_builder(args=args, logger=logger)
     elif args.command == OPTIONS_SILVER_BUILDER_COMMAND:
         _run_options_silver_builder(args=args, logger=logger)
+    elif args.command == INSTRUMENT_METADATA_GOLD_BUILDER_COMMAND:
+        _run_instrument_metadata_gold_builder(args=args, logger=logger)
+    elif args.command == INDEX_PRICE_GOLD_BUILDER_COMMAND:
+        _run_index_price_gold_builder(args=args, logger=logger)
     elif args.command == OPTIONS_GOLD_BUILDER_COMMAND:
         _run_options_gold_builder(args=args, logger=logger)
     elif args.command in {SILVER_BUILDER_COMMAND, LEGACY_SILVER_BUILDER_COMMAND}:

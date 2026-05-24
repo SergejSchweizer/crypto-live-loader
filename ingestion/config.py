@@ -44,6 +44,24 @@ DEFAULT_CONFIG: Config = {
             "schema_version": "v1",
             "json_output": False,
         },
+        "instrument_metadata": {
+            "currencies": ["BTC", "ETH", "SOL"],
+            "kind": "option",
+            "include_inactive": False,
+            "save_parquet_lake": True,
+            "lake_root": "lake/bronze",
+            "source": "rest_get_instruments",
+            "schema_version": "v1",
+            "json_output": False,
+        },
+        "index_price": {
+            "symbols": ["btc_usd", "eth_usd", "sol_usdc"],
+            "save_parquet_lake": True,
+            "lake_root": "lake/bronze",
+            "source": "rest_get_index_price",
+            "schema_version": "v1",
+            "json_output": False,
+        },
     },
 }
 
@@ -188,13 +206,19 @@ def config_str_list(section: Config, name: str, default: list[str]) -> list[str]
     return default
 
 
-def configured_logfile_path(config: Config, default_name: str = "crypto-live-loader.log") -> Path:
-    """Resolve the shared logfile path from top-level config or runtime fallback."""
+def configured_log_dir(config: Config) -> Path:
+    """Resolve the canonical log directory from top-level config or runtime fallback."""
 
     logfile = config.get("logfile")
     if isinstance(logfile, str) and logfile.strip():
-        return Path(logfile.strip())
+        return Path(logfile.strip()).parent
 
     runtime_config = config_section(config, "runtime")
     log_dir = config_str(runtime_config, "log_dir", ".logs")
-    return Path(log_dir) / default_name
+    return Path(log_dir)
+
+
+def configured_logfile_path(config: Config, default_name: str = "crypto-live-loader.log") -> Path:
+    """Resolve a logfile path for compatibility with legacy callers."""
+
+    return configured_log_dir(config) / default_name

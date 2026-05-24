@@ -6,7 +6,7 @@ import logging
 from logging.handlers import TimedRotatingFileHandler
 
 from api.logging_common import ModuleScopeFilter, unified_formatter
-from ingestion.config import Config, config_int, config_section, configured_logfile_path, load_config
+from ingestion.config import Config, config_int, config_section, configured_log_dir, load_config
 
 LOGGER_NAME = "crypto_live_loader"
 DEFAULT_LOG_DIR = ".logs"
@@ -23,7 +23,7 @@ def _safe_log_module_name(module_name: str) -> str:
 
 
 def configure_logging(module_name: str = "crypto-live-loader", config: Config | None = None) -> logging.Logger:
-    """Configure runtime logging with rotation to the shared configured logfile."""
+    """Configure runtime logging with rotation to one file per module."""
 
     safe_module_name = _safe_log_module_name(module_name)
     logger = logging.getLogger(f"{LOGGER_NAME}.{safe_module_name}")
@@ -36,11 +36,12 @@ def configure_logging(module_name: str = "crypto-live-loader", config: Config | 
     scope_filter = ModuleScopeFilter()
     resolved_config = config or load_config()
     runtime_config = config_section(resolved_config, "runtime")
-    logfile = configured_logfile_path(resolved_config)
+    log_dir = configured_log_dir(resolved_config)
+    logfile = log_dir / f"{safe_module_name}.log"
     rotation_days = max(1, config_int(runtime_config, "log_rotation_days", DEFAULT_LOG_ROTATION_DAYS))
     backup_count = max(0, config_int(runtime_config, "log_backup_count", DEFAULT_LOG_BACKUP_COUNT))
     try:
-        logfile.parent.mkdir(parents=True, exist_ok=True)
+        log_dir.mkdir(parents=True, exist_ok=True)
         file_handler = TimedRotatingFileHandler(
             filename=logfile,
             when="D",
