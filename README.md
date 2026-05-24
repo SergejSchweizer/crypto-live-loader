@@ -1,8 +1,8 @@
-# crypto-l2-loader
+# crypto-live-loader
 
 ## Project Overview
 
-`crypto-l2-loader` is a focused Deribit Level 2 order book ingestion tool. It collects bounded public order book snapshots, normalizes them into typed `L2Snapshot` records, and persists raw snapshots to a local bronze Parquet lake.
+`crypto-live-loader` is a focused Deribit Level 2 order book ingestion tool. It collects bounded public order book snapshots, normalizes them into typed `L2Snapshot` records, and persists raw snapshots to a local bronze Parquet lake.
 It also includes Polars-based Silver and Gold transforms for fixed-width L2 snapshot features and M1 aggregate artifacts.
 
 Current scope is intentionally narrow:
@@ -128,9 +128,9 @@ Supported config keys:
 The production cron setup runs the three data-layer builders once per minute from the repository root:
 
 ```cron
-* * * * * cd /home/vcs/git/crypto-l2-loader && .venv/bin/python main.py bronze-builder --symbols BTC ETH SOL
-* * * * * cd /home/vcs/git/crypto-l2-loader && .venv/bin/python main.py silver-builder
-* * * * * cd /home/vcs/git/crypto-l2-loader && .venv/bin/python main.py gold-builder
+* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py bronze-builder --symbols BTC ETH SOL
+* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py silver-builder
+* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py gold-builder
 ```
 
 | Job | Purpose | Reads | Writes | Log File |

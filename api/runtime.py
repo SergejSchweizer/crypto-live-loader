@@ -8,7 +8,7 @@ from pathlib import Path
 
 from ingestion.config import Config, config_int, config_section, config_str, load_config
 
-LOGGER_NAME = "crypto_l2_loader"
+LOGGER_NAME = "crypto_live_loader"
 DEFAULT_LOG_DIR = ".logs"
 DEFAULT_LOG_ROTATION_DAYS = 7
 DEFAULT_LOG_BACKUP_COUNT = 0
@@ -19,10 +19,10 @@ def _safe_log_module_name(module_name: str) -> str:
     """Return a filesystem-safe log module name."""
 
     normalized = module_name.strip().replace("/", "-").replace("\\", "-")
-    return normalized or "crypto-l2-loader"
+    return normalized or "crypto-live-loader"
 
 
-def configure_logging(module_name: str = "crypto-l2-loader", config: Config | None = None) -> logging.Logger:
+def configure_logging(module_name: str = "crypto-live-loader", config: Config | None = None) -> logging.Logger:
     """Configure module-specific file logging with weekly rotation."""
 
     safe_module_name = _safe_log_module_name(module_name)
