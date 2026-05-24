@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 import polars as pl
 
 from ingestion.artifact_state import file_fingerprints, load_json_state, write_json_state
 from ingestion.incremental import inputs_unchanged
+from ingestion.polars_parquet_store import upsert_partition_parquet
 
 INSTRUMENT_METADATA_GOLD_DATASET_TYPE = "instrument_metadata_daily_summary"
 INSTRUMENT_METADATA_GOLD_SCHEMA_VERSION = "v1"
@@ -101,14 +101,11 @@ def _write_gold_instrument_metadata(gold: pl.DataFrame, lake_root: str) -> list[
         out_dir = Path(lake_root) / f"dataset_type={INSTRUMENT_METADATA_GOLD_DATASET_TYPE}" / f"exchange={exchange}"
         out_dir.mkdir(parents=True, exist_ok=True)
         file_path = out_dir / "data.parquet"
-        output = partition
-        if file_path.exists():
-            output = pl.concat([pl.read_parquet(file_path), partition], how="vertical")
-        output = output.unique(subset=INSTRUMENT_METADATA_GOLD_NATURAL_KEY, keep="last").sort(
-            ["snapshot_date", "kind", "base_currency"]
+        upsert_partition_parquet(
+            file_path=file_path,
+            partition=partition,
+            natural_key=INSTRUMENT_METADATA_GOLD_NATURAL_KEY,
+            sort_by=["snapshot_date", "kind", "base_currency"],
         )
-        staging = out_dir / f".staging-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%f')}.parquet"
-        output.write_parquet(staging)
-        staging.replace(file_path)
         written_files.append(str(file_path.resolve()))
     return sorted(written_files)

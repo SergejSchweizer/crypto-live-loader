@@ -11,8 +11,8 @@ import polars as pl
 
 from ingestion.artifact_io import write_json_artifact
 from ingestion.artifact_state import file_fingerprints, load_json_state, write_json_state
-from ingestion.file_lock import locked_output_path
 from ingestion.incremental import changed_input_files, inputs_unchanged
+from ingestion.polars_parquet_store import upsert_partition_parquet
 
 SILVER_L2_FEATURE_DATASET_TYPE = "l2_snapshot_features"
 SILVER_SCHEMA_VERSION = "v1"
@@ -220,19 +220,16 @@ def save_silver_l2_snapshot_features(
         part_dir.mkdir(parents=True, exist_ok=True)
         month_partition = key[3]
         file_path = part_dir / f"{month_partition}.parquet"
-        staging_path = part_dir / f".staging-{datetime.now().strftime('%Y%m%dT%H%M%S%f')}.parquet"
         metadata_path = part_dir / f"{month_partition}.json"
         plot_path = part_dir / f"{month_partition}.png"
         legacy_file_path = part_dir / "data.parquet"
-        with locked_output_path(file_path):
-            output = partition
-            existing_file_path = file_path if file_path.exists() else legacy_file_path
-            if existing_file_path.exists():
-                output = pl.concat([pl.read_parquet(existing_file_path), partition], how="vertical")
-
-            output = output.unique(subset=SILVER_NATURAL_KEY, keep="last").sort("ts_event")
-            output.write_parquet(staging_path)
-            staging_path.replace(file_path)
+        output = upsert_partition_parquet(
+            file_path=file_path,
+            partition=partition,
+            natural_key=SILVER_NATURAL_KEY,
+            sort_by="ts_event",
+            legacy_file_path=legacy_file_path,
+        )
 
         written_files.append(str(file_path.resolve()))
         if manifest:

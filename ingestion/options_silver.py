@@ -11,8 +11,8 @@ import polars as pl
 
 from ingestion.artifact_io import column_dtype_metadata, timestamp_bounds_iso, write_json_artifact
 from ingestion.artifact_state import file_fingerprints, load_json_state, write_json_state
-from ingestion.file_lock import locked_output_path
 from ingestion.incremental import changed_input_files, inputs_unchanged
+from ingestion.polars_parquet_store import upsert_partition_parquet
 
 SILVER_OPTION_DATASET_TYPE = "option_chain_features_1m"
 SILVER_OPTION_SCHEMA_VERSION = "v1"
@@ -229,16 +229,14 @@ def save_silver_option_chain_features(
         part_dir.mkdir(parents=True, exist_ok=True)
         month_partition = key[3]
         file_path = part_dir / f"{month_partition}.parquet"
-        staging_path = part_dir / f".staging-{datetime.now().strftime('%Y%m%dT%H%M%S%f')}.parquet"
         metadata_path = part_dir / f"{month_partition}.json"
         plot_path = part_dir / f"{month_partition}.png"
-        with locked_output_path(file_path):
-            output = partition
-            if file_path.exists():
-                output = pl.concat([pl.read_parquet(file_path), partition], how="vertical")
-            output = output.unique(subset=SILVER_OPTION_NATURAL_KEY, keep="last").sort("ts_snapshot")
-            output.write_parquet(staging_path)
-            staging_path.replace(file_path)
+        output = upsert_partition_parquet(
+            file_path=file_path,
+            partition=partition,
+            natural_key=SILVER_OPTION_NATURAL_KEY,
+            sort_by="ts_snapshot",
+        )
         written_files.append(str(file_path.resolve()))
         if manifest:
             write_json_artifact(metadata_path, silver_option_artifact_metadata(output))

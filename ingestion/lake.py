@@ -8,12 +8,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
-from ingestion.file_lock import locked_output_path
 from ingestion.l2 import (
     L2Snapshot,
     l2_snapshot_partition_key,
     l2_snapshot_record,
 )
+from ingestion.parquet_repository import ParquetUpsertRepository
 
 SnapshotPartitionKey = tuple[str, str, str, int, str, str, str]
 SnapshotNaturalKey = tuple[str, str, str, int, str, datetime]
@@ -58,23 +58,6 @@ def snapshot_record_natural_key(record: dict[str, object]) -> SnapshotNaturalKey
     )
 
 
-def merge_and_deduplicate_snapshot_rows(
-    existing: list[dict[str, object]],
-    new: list[dict[str, object]],
-) -> list[dict[str, object]]:
-    """Merge old and new raw snapshot rows while keeping the latest duplicate key."""
-
-    merged: dict[SnapshotNaturalKey, dict[str, object]] = {}
-    for record in existing:
-        merged[snapshot_record_natural_key(record)] = record
-    for record in new:
-        merged[snapshot_record_natural_key(record)] = record
-
-    rows = list(merged.values())
-    rows.sort(key=lambda item: cast(datetime, item["event_time"]))
-    return rows
-
-
 def save_l2_snapshot_parquet_lake(
     snapshots_by_symbol: dict[str, list[L2Snapshot]],
     lake_root: str,
@@ -83,14 +66,9 @@ def save_l2_snapshot_parquet_lake(
 ) -> list[str]:
     """Save raw L2 snapshots to daily bronze parquet lake partitions."""
 
-    try:
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-    except ImportError as exc:
-        raise RuntimeError("pyarrow is required for parquet lake output. Install project dependencies.") from exc
-
     run_id = utc_run_id()
     ingested_at = datetime.now(UTC)
+    repository = ParquetUpsertRepository()
 
     grouped: defaultdict[SnapshotPartitionKey, list[dict[str, object]]] = defaultdict(list)
     for snapshots in snapshots_by_symbol.values():
@@ -110,18 +88,13 @@ def save_l2_snapshot_parquet_lake(
         part_dir = snapshot_partition_path(lake_root=lake_root, key=key)
         part_dir.mkdir(parents=True, exist_ok=True)
         file_path = part_dir / "data.parquet"
-        with locked_output_path(file_path):
-            staging_path = part_dir / f".staging-{run_id}.parquet"
-            existing_rows: list[dict[str, object]] = []
-            if file_path.exists():
-                existing_table = pq.ParquetFile(file_path).read()  # type: ignore[no-untyped-call]
-                existing_rows = existing_table.to_pylist()
-
-            merged_rows = merge_and_deduplicate_snapshot_rows(existing=existing_rows, new=rows)
-            table = pa.Table.from_pylist(merged_rows)
-            pq.write_table(table, staging_path)  # type: ignore[no-untyped-call]
-            staging_path.replace(file_path)
-        return str(file_path.resolve())
+        return repository.upsert(
+            file_path=file_path,
+            records=rows,
+            natural_key=lambda item: snapshot_record_natural_key(item),
+            sort_key=lambda item: cast(datetime, item["event_time"]),
+            staging_name=f".staging-{run_id}.parquet",
+        )
 
     written_files: list[str] = []
     if grouped:

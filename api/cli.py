@@ -6,11 +6,11 @@ import argparse
 import asyncio
 import json
 import logging
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import asdict
 from datetime import UTC, datetime
 from time import perf_counter
-from typing import cast
+from typing import TypeAlias, cast
 
 from api.constants import (
     BRONZE_BUILDER_COMMAND,
@@ -105,6 +105,7 @@ SnapshotsBySymbol = dict[str, list[L2Snapshot]]
 OptionRowsByCurrency = dict[str, list[OptionTickerSnapshotRow]]
 InstrumentMetadataRowsByDate = dict[str, list[InstrumentMetadataSnapshotRow]]
 IndexPriceRowsBySymbol = dict[str, list[IndexPriceSnapshotRow]]
+CommandHandler: TypeAlias = Callable[[argparse.Namespace, logging.Logger, Config], None]
 
 
 def _boolean_optional_flag(
@@ -1477,6 +1478,106 @@ def _run_validate_symbols(args: argparse.Namespace, logger: logging.Logger) -> N
     )
 
 
+def _handle_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    _run_bronze_builder(args=args, logger=logger, config=config)
+
+
+def _handle_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    _run_options_bronze_builder(args=args, logger=logger, config=config)
+
+
+def _handle_instrument_metadata_bronze_builder(
+    args: argparse.Namespace, logger: logging.Logger, config: Config
+) -> None:
+    _ = config
+    _run_instrument_metadata_bronze_builder(args=args, logger=logger)
+
+
+def _handle_index_price_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    _ = config
+    _run_index_price_bronze_builder(args=args, logger=logger)
+
+
+def _handle_instrument_metadata_silver_builder(
+    args: argparse.Namespace, logger: logging.Logger, config: Config
+) -> None:
+    _ = config
+    _run_instrument_metadata_silver_builder(args=args, logger=logger)
+
+
+def _handle_index_price_silver_builder(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    _ = config
+    _run_index_price_silver_builder(args=args, logger=logger)
+
+
+def _handle_options_silver_builder(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    _ = config
+    _run_options_silver_builder(args=args, logger=logger)
+
+
+def _handle_instrument_metadata_gold_builder(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    _ = config
+    _run_instrument_metadata_gold_builder(args=args, logger=logger)
+
+
+def _handle_index_price_gold_builder(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    _ = config
+    _run_index_price_gold_builder(args=args, logger=logger)
+
+
+def _handle_options_gold_builder(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    _ = config
+    _run_options_gold_builder(args=args, logger=logger)
+
+
+def _handle_l2_silver_builder(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    _ = config
+    _run_silver_builder(args=args, logger=logger)
+
+
+def _handle_l2_gold_builder(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    _ = config
+    _run_gold_builder(args=args, logger=logger)
+
+
+def _handle_validate_symbols(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    _ = config
+    _run_validate_symbols(args=args, logger=logger)
+
+
+def command_handlers() -> dict[str, CommandHandler]:
+    """Return command handler registry used by CLI dispatch."""
+
+    return {
+        BRONZE_BUILDER_COMMAND: _handle_bronze_builder,
+        OPTIONS_BRONZE_BUILDER_COMMAND: _handle_options_bronze_builder,
+        INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND: _handle_instrument_metadata_bronze_builder,
+        INDEX_PRICE_BRONZE_BUILDER_COMMAND: _handle_index_price_bronze_builder,
+        SILVER_BUILDER_COMMAND: _handle_l2_silver_builder,
+        LEGACY_SILVER_BUILDER_COMMAND: _handle_l2_silver_builder,
+        OPTIONS_SILVER_BUILDER_COMMAND: _handle_options_silver_builder,
+        INSTRUMENT_METADATA_SILVER_BUILDER_COMMAND: _handle_instrument_metadata_silver_builder,
+        INDEX_PRICE_SILVER_BUILDER_COMMAND: _handle_index_price_silver_builder,
+        GOLD_BUILDER_COMMAND: _handle_l2_gold_builder,
+        LEGACY_GOLD_BUILDER_COMMAND: _handle_l2_gold_builder,
+        OPTIONS_GOLD_BUILDER_COMMAND: _handle_options_gold_builder,
+        INSTRUMENT_METADATA_GOLD_BUILDER_COMMAND: _handle_instrument_metadata_gold_builder,
+        INDEX_PRICE_GOLD_BUILDER_COMMAND: _handle_index_price_gold_builder,
+        VALIDATE_SYMBOLS_COMMAND: _handle_validate_symbols,
+    }
+
+
+def dispatch_command(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    """Dispatch one parsed command to its registered handler."""
+
+    handlers = command_handlers()
+    command = cast(str, args.command)
+    handler = handlers.get(command)
+    if handler is None:
+        raise ValueError(f"Unsupported command '{command}'")
+    handler(args, logger, config)
+
+
 def main() -> None:
     """CLI entrypoint."""
 
@@ -1484,32 +1585,7 @@ def main() -> None:
     parser = build_parser(config)
     args = parser.parse_args()
     logger = configure_logging(module_name=str(args.command), config=config)
-    if args.command == BRONZE_BUILDER_COMMAND:
-        _run_bronze_builder(args=args, logger=logger, config=config)
-    elif args.command == OPTIONS_BRONZE_BUILDER_COMMAND:
-        _run_options_bronze_builder(args=args, logger=logger, config=config)
-    elif args.command == INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND:
-        _run_instrument_metadata_bronze_builder(args=args, logger=logger)
-    elif args.command == INDEX_PRICE_BRONZE_BUILDER_COMMAND:
-        _run_index_price_bronze_builder(args=args, logger=logger)
-    elif args.command == INSTRUMENT_METADATA_SILVER_BUILDER_COMMAND:
-        _run_instrument_metadata_silver_builder(args=args, logger=logger)
-    elif args.command == INDEX_PRICE_SILVER_BUILDER_COMMAND:
-        _run_index_price_silver_builder(args=args, logger=logger)
-    elif args.command == OPTIONS_SILVER_BUILDER_COMMAND:
-        _run_options_silver_builder(args=args, logger=logger)
-    elif args.command == INSTRUMENT_METADATA_GOLD_BUILDER_COMMAND:
-        _run_instrument_metadata_gold_builder(args=args, logger=logger)
-    elif args.command == INDEX_PRICE_GOLD_BUILDER_COMMAND:
-        _run_index_price_gold_builder(args=args, logger=logger)
-    elif args.command == OPTIONS_GOLD_BUILDER_COMMAND:
-        _run_options_gold_builder(args=args, logger=logger)
-    elif args.command in {SILVER_BUILDER_COMMAND, LEGACY_SILVER_BUILDER_COMMAND}:
-        _run_silver_builder(args=args, logger=logger)
-    elif args.command in {GOLD_BUILDER_COMMAND, LEGACY_GOLD_BUILDER_COMMAND}:
-        _run_gold_builder(args=args, logger=logger)
-    elif args.command == VALIDATE_SYMBOLS_COMMAND:
-        _run_validate_symbols(args=args, logger=logger)
+    dispatch_command(args=args, logger=logger, config=config)
 
 
 if __name__ == "__main__":

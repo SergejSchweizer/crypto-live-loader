@@ -1,5 +1,42 @@
 # crypto-live-loader
 
+## Table of Contents
+
+- [Project Overview](#project-overview)
+- [Architecture](#architecture)
+- [Installation](#installation)
+  - [Prerequisites](#prerequisites)
+  - [Setup](#setup)
+  - [Package Dependencies](#package-dependencies)
+- [Configuration](#configuration)
+- [Current Jobs](#current-jobs)
+- [Usage](#usage)
+  - [Bronze Builder](#bronze-builder)
+  - [Options Bronze Builder](#options-bronze-builder)
+  - [Options Silver Builder](#options-silver-builder)
+  - [Gold Builder](#gold-builder)
+  - [Options Gold Builder](#options-gold-builder)
+- [Modules](#modules)
+- [Bronze Datasets](#bronze-datasets)
+  - [Bronze Dataset: `l2_snapshot`](#bronze-dataset-l2_snapshot)
+  - [Bronze Dataset: `option_ticker_snapshot_1m`](#bronze-dataset-option_ticker_snapshot_1m)
+- [Dataset Catalog](#dataset-catalog)
+  - [Dataset: `l2_snapshot`](#dataset-l2_snapshot)
+  - [Dataset: `option_ticker_snapshot_1m`](#dataset-option_ticker_snapshot_1m)
+  - [Dataset: `instrument_metadata_snapshot_daily`](#dataset-instrument_metadata_snapshot_daily)
+  - [Dataset: `index_price_snapshot_1m`](#dataset-index_price_snapshot_1m)
+  - [Dataset: `l2_snapshot_features`](#dataset-l2_snapshot_features)
+  - [Dataset: `option_chain_features_1m`](#dataset-option_chain_features_1m)
+  - [Dataset: `instrument_metadata_snapshot_features_daily`](#dataset-instrument_metadata_snapshot_features_daily)
+  - [Dataset: `index_price_snapshot_features_1m`](#dataset-index_price_snapshot_features_1m)
+  - [Dataset: `l2_m1_features`](#dataset-l2_m1_features)
+  - [Dataset: `option_surface_m1`](#dataset-option_surface_m1)
+  - [Dataset: `instrument_metadata_daily_summary`](#dataset-instrument_metadata_daily_summary)
+  - [Dataset: `index_price_m1_features`](#dataset-index_price_m1_features)
+- [Testing](#testing)
+- [Known Limitations](#known-limitations)
+- [Future Improvements](#future-improvements)
+
 ## Project Overview
 
 `crypto-live-loader` is a focused Deribit Level 2 order book ingestion tool. It collects bounded public order book snapshots, normalizes them into typed `L2Snapshot` records, and persists raw snapshots to a local bronze Parquet lake.
@@ -567,66 +604,193 @@ lake/bronze/
 | `price_change` | Session price change metric from summary row. | Regime/momentum context for exploratory analysis. |
 | `raw_payload_hash` | Deterministic hash of raw row payload. | Row-level reproducibility and tamper/change detection. |
 
-## Data Dictionary
+## Dataset Catalog
 
-`L2Snapshot` captures one normalized order book response:
+This section documents each persisted dataset with explicit column contracts, column meaning, and why each field matters operationally.
 
-| Field | Description |
-|---|---|
-| `exchange`, `symbol`, `timestamp` | Source and event identity. |
-| `fetch_duration_s` | Wall-clock fetch duration. |
-| `bids`, `asks` | Price/amount levels as ordered tuples. |
-| `mark_price`, `index_price` | Deribit mark and index prices when present. |
-| `open_interest` | Deribit open interest value included in the order book response. |
-| `funding_8h`, `current_funding` | Deribit funding fields included in the order book response. |
+### Dataset: `l2_snapshot`
+Layer: Bronze
 
-Bronze Parquet rows are produced from `L2Snapshot` with additional lake metadata:
+| Column | Meaning | Why it matters |
+|---|---|---|
+| `schema_version` | Dataset schema label (`v1`). | Controlled schema evolution and reproducibility. |
+| `dataset_type` | Dataset identity (`l2_snapshot`). | Prevents cross-dataset mixing in downstream transforms. |
+| `exchange` | Venue identifier (`deribit`). | Source lineage and multi-venue extensibility. |
+| `symbol` | Canonical instrument (for example `BTC-PERPETUAL`). | Primary instrument key for partitioning and joins. |
+| `instrument_type` | Instrument class (`perp`). | Keeps analytics scoped to comparable contract families. |
+| `event_time` | Exchange snapshot timestamp. | True market-time axis for feature and bar aggregation. |
+| `ingested_at` | Pipeline write timestamp in UTC. | Latency and freshness diagnostics. |
+| `run_id` | Unique run identifier. | End-to-end traceability and replay auditing. |
+| `source` | Collection channel (`rest_order_book`). | Distinguishes payload provenance. |
+| `depth` | Requested levels per side. | Defines expected array widths and comparability. |
+| `fetch_duration_s` | Per-call wall-clock duration. | Runtime performance and incident diagnostics. |
+| `bids` | Ordered bid levels (`price`, `amount`). | Required for depth/imbalance/microprice features. |
+| `asks` | Ordered ask levels (`price`, `amount`). | Required for spread and pressure signals. |
+| `mark_price` | Deribit mark price. | Stable valuation anchor for quality checks. |
+| `index_price` | Deribit index price. | Spot anchor for basis/carry context. |
+| `open_interest` | Open interest at snapshot. | Positioning/liquidity regime signal. |
+| `funding_8h` | 8-hour funding metric. | Carry and regime context. |
+| `current_funding` | Current funding rate. | Short-horizon carry pressure signal. |
 
-| Field | Meaning |
-|---|---|
-| `schema_version` | Parquet row schema version. Currently `v1`. |
-| `dataset_type` | Dataset identifier. Currently `l2_snapshot`. |
-| `instrument_type` | Instrument category. Currently `perp`. |
-| `event_time` | Snapshot exchange timestamp. |
-| `ingested_at` | UTC timestamp when the row was prepared for lake persistence. |
-| `run_id` | Unique CLI run identifier assigned during ingestion. |
-| `source` | Logical source name. Currently `rest_order_book`. |
-| `depth` | Requested order book depth per side, also used as a partition column. |
-| `bids`, `asks` | Raw normalized price/amount levels. |
+### Dataset: `option_ticker_snapshot_1m`
+Layer: Bronze
 
-Silver L2 snapshot feature rows are derived from Bronze with Polars:
+| Column | Meaning | Why it matters |
+|---|---|---|
+| `schema_version` | Dataset schema label (`v1`). | Controlled evolution for options raw payloads. |
+| `dataset_type` | Dataset identity (`option_ticker_snapshot_1m`). | Prevents mixing with perp L2 raw rows. |
+| `exchange` | Venue identifier (`deribit`). | Lineage and multi-venue compatibility. |
+| `source` | Endpoint channel (`rest_get_book_summary_by_currency`). | Reproducibility and endpoint provenance. |
+| `currency` | Logical analysis currency (`BTC`,`ETH`,`SOL`). | Stable partition key for options analytics. |
+| `requested_currency` | User/config requested currency. | Intent traceability. |
+| `source_currency` | Endpoint currency (`BTC`,`ETH`,`USDC` for SOL). | Auditability for SOL mapping behavior. |
+| `instrument_name` | Option instrument id. | Contract identity and parsing source. |
+| `base_currency` | Base currency from payload. | Integrity checks and contract context. |
+| `quote_currency` | Quote currency from payload. | Pricing denomination context. |
+| `instrument_type` | Instrument class (`option`). | Downstream transform scope control. |
+| `snapshot_time` | Pipeline minute snapshot time. | Canonical time axis for chain-state features. |
+| `exchange_creation_time` | Payload creation timestamp. | Staleness checks vs observed time. |
+| `ingested_at` | Persist timestamp UTC. | Pipeline timing observability. |
+| `run_id` | Unique run id. | Debug/replay traceability. |
+| `bid_price`,`ask_price`,`mid_price` | Top quote values. | Liquidity/spread feature inputs. |
+| `mark_price`,`mark_iv` | Mark valuation and implied vol. | Core surface and volatility signals. |
+| `underlying_price`,`underlying_index` | Underlying reference values. | Moneyness and surface alignment inputs. |
+| `interest_rate` | Option rate field. | Future model/greeks compatibility. |
+| `open_interest`,`volume`,`volume_usd` | Activity/liquidity metrics. | Filtering, weighting, and quality context. |
+| `high`,`low`,`last`,`price_change` | Session context fields. | Sanity checks and regime context. |
+| `raw_payload_hash` | Deterministic payload hash. | Row-level reproducibility and tamper detection. |
 
-| Field | Meaning |
-|---|---|
-| `schema_version` | Silver feature schema version. Currently `v1`. |
-| `dataset_type` | Dataset identifier. Currently `l2_snapshot_features`. |
-| `ts_event` | Exchange event timestamp from the Bronze snapshot. |
-| `ts_received` | Bronze ingestion timestamp used as the received-time fallback. |
-| `exchange`, `symbol`, `instrument_type`, `source`, `run_id`, `depth` | Source and run identity. |
-| `month` | Monthly partition key derived from `ts_event`. |
-| `mid_price`, `spread`, `spread_bps` | Top-of-book price features. |
-| `best_bid_price`, `best_bid_size`, `best_ask_price`, `best_ask_size` | Best quote features. |
-| `bid_prices`, `bid_sizes`, `ask_prices`, `ask_sizes` | Fixed-width depth arrays padded with nulls to `depth`. |
-| `bid_volume_N`, `ask_volume_N` | Cumulative size for depth windows `1`, `5`, `10`, `20`, and `50`. |
-| `imbalance_N` | `(bid_volume_N - ask_volume_N) / (bid_volume_N + ask_volume_N)` for each depth window. |
-| `microprice` | Top-of-book size-weighted microprice. |
-| `mark_price`, `index_price`, `open_interest`, `funding_rate`, `funding_8h` | Deribit market fields carried into Silver. |
-| `is_valid`, `validation_flags` | Deterministic book validation status and reason flags. |
+### Dataset: `instrument_metadata_snapshot_daily`
+Layer: Bronze
 
-Gold M1 rows are derived from Silver:
+| Column | Meaning | Why it matters |
+|---|---|---|
+| `schema_version`,`dataset_type` | Contract and identity fields. | Schema control and dataset routing. |
+| `exchange`,`source` | Venue and endpoint source. | Lineage and fetch-path auditability. |
+| `snapshot_date`,`ingested_at`,`run_id` | Snapshot identity/time/run metadata. | Daily reproducibility and run tracing. |
+| `instrument_name` | Instrument identifier. | Primary natural key within snapshot date. |
+| `kind`,`instrument_type`,`option_type` | Deribit instrument classification. | Contract family filtering and modeling scope. |
+| `base_currency`,`quote_currency`,`counter_currency`,`settlement_currency` | Currency descriptors. | Settlement/pricing context and validation. |
+| `tick_size`,`contract_size`,`min_trade_amount` | Trading rule fields. | Execution constraints and quality checks. |
+| `is_active` | Active vs expired state. | Daily tradable-universe construction. |
+| `creation_timestamp`,`expiration_timestamp` | Lifecycle timestamps. | Tenor calculations and expiry handling. |
+| `strike` | Strike value for options. | Surface bucketing and contract geometry. |
+| `raw_payload_hash` | Deterministic payload hash. | Snapshot reproducibility and change detection. |
 
-| Field | Meaning |
-|---|---|
-| `ts_minute`, `exchange`, `symbol`, `instrument_type`, `depth`, `feature_set_version` | M1 feature identity. |
-| `snapshot_count`, `coverage_ratio`, `first_snapshot_ts`, `last_snapshot_ts` | Minute coverage metadata. |
-| `mid_open`, `mid_high`, `mid_low`, `mid_close`, `mid_mean`, `mid_std` | M1 mid-price features. |
-| `spread_bps_mean`, `spread_bps_max`, `spread_bps_p95` | M1 spread features. |
-| `microprice_mean`, `microprice_close`, `microprice_minus_mid_mean` | M1 microprice features. |
-| `imbalance_N_mean` | Mean imbalance for depth windows `1`, `5`, `10`, `20`, and `50`. |
-| `bid_volume_N_mean`, `ask_volume_N_mean` | Mean cumulative book size for each depth window. |
-| `book_pressure_N_mean` | Mean `bid_volume_N / (bid_volume_N + ask_volume_N)` for each depth window. |
-| `mark_price_last`, `index_price_last`, `open_interest_last`, `funding_rate_last` | Last market fields in the minute. |
-| `is_complete_minute`, `quality_flags` | Gold quality status. Missing scale rows use `quality_flags = ["missing_minute"]`; optional fill annotations can include `filled_neighbor_average`, `filled_linear_interpolation`, `filled_forward_boundary`, `filled_backward_boundary`, `missing_long_gap`, or `filled_kalman_long_gap`. |
+### Dataset: `index_price_snapshot_1m`
+Layer: Bronze
+
+| Column | Meaning | Why it matters |
+|---|---|---|
+| `schema_version`,`dataset_type` | Contract and identity fields. | Safe schema evolution and routing. |
+| `exchange`,`source` | Venue and endpoint source. | Source lineage and auditability. |
+| `index_name` | Deribit index key (`btc_usd`, etc.). | Primary partition and join key. |
+| `snapshot_time`,`event_time` | Minute snapshot timestamps. | Canonical time alignment for aggregation. |
+| `price` | Index price value. | Core signal for downstream returns/features. |
+| `ingested_at`,`run_id` | Persist/run metadata. | Pipeline diagnostics and replay traceability. |
+| `raw_payload_hash` | Deterministic row hash. | Reproducibility and change auditing. |
+
+### Dataset: `l2_snapshot_features`
+Layer: Silver
+
+| Column | Meaning | Why it matters |
+|---|---|---|
+| `schema_version`,`dataset_type` | Contract and identity fields. | Stable downstream expectations. |
+| `ts_event`,`ts_received`,`month` | Time and partition metadata. | Temporal aggregation and scalable storage. |
+| `exchange`,`symbol`,`instrument_type`,`source`,`run_id`,`depth` | Source identity fields. | Deterministic grouping and reproducibility. |
+| `best_bid_*`,`best_ask_*`,`mid_price`,`spread`,`spread_bps`,`microprice` | Top-of-book price features. | Core microstructure state and trading signals. |
+| `bid_prices`,`ask_prices`,`bid_sizes`,`ask_sizes` | Fixed-width depth arrays. | Consistent model-ready tensor representation. |
+| `bid_volume_N`,`ask_volume_N`,`imbalance_N` | Depth-window liquidity/imbalance metrics. | Order-book pressure and directional context. |
+| `mark_price`,`index_price`,`open_interest`,`funding_rate`,`funding_8h` | Carry/market context fields. | Regime and valuation conditioning. |
+| `is_valid`,`validation_flags` | Deterministic quality status. | Guardrails for downstream training/backtests. |
+
+### Dataset: `option_chain_features_1m`
+Layer: Silver
+
+| Column | Meaning | Why it matters |
+|---|---|---|
+| `schema_version`,`dataset_type` | Contract and identity fields. | Stable schema for surface transforms. |
+| `ts_snapshot`,`month` | Snapshot and partition timestamps. | Time alignment and scalable partitioning. |
+| `exchange`,`currency`,`instrument_type`,`source`,`run_id`,`instrument_name` | Source and contract identity. | Deterministic grouping and auditability. |
+| `expiry_date`,`expiry_timestamp`,`strike`,`option_type` | Contract geometry fields. | Surface axes and tenor/strike bucketing. |
+| `days_to_expiry`,`tau_years` | Time-to-expiry features. | Volatility term-structure modeling input. |
+| `underlying_price`,`moneyness`,`log_moneyness` | Relative moneyness state. | Comparable cross-strike analytics. |
+| `bid_price`,`ask_price`,`mid_price`,`mark_price`,`mark_iv` | Pricing and IV fields. | Core volatility-surface signal set. |
+| `interest_rate`,`open_interest`,`volume`,`volume_usd` | Market context/liquidity. | Quality filtering and weighting signals. |
+| `spread`,`spread_bps` | Quote quality/liquidity measures. | Tradability and noise filtering. |
+| `is_atm_candidate`,`is_valid_for_surface`,`quality_flags` | Surface fitness diagnostics. | Robustness and controlled data usage. |
+
+### Dataset: `instrument_metadata_snapshot_features_daily`
+Layer: Silver
+
+| Column | Meaning | Why it matters |
+|---|---|---|
+| `schema_version`,`dataset_type` | Contract and identity fields. | Stable downstream contract. |
+| `exchange`,`source`,`snapshot_date`,`month`,`run_id`,`ingested_at` | Snapshot identity and partition metadata. | Daily rebuild reproducibility. |
+| `instrument_name`,`kind`,`base_currency`,`quote_currency`,`settlement_currency`,`instrument_type` | Contract descriptors. | Universe segmentation and filtering. |
+| `tick_size`,`contract_size`,`min_trade_amount`,`is_active` | Trading rule state. | Execution constraints and validity checks. |
+| `option_type`,`strike` | Option geometry descriptors. | Surface-compatible metadata features. |
+| `is_option`,`days_to_expiration` | Derived metadata features. | Fast downstream daily analytics. |
+
+### Dataset: `index_price_snapshot_features_1m`
+Layer: Silver
+
+| Column | Meaning | Why it matters |
+|---|---|---|
+| `schema_version`,`dataset_type` | Contract and identity fields. | Schema stability for minute features. |
+| `exchange`,`source`,`index_name`,`month`,`run_id` | Identity and partition metadata. | Deterministic joins and partitioning. |
+| `ts_event`,`ts_received` | Event and receive timestamps. | Latency checks and temporal ordering. |
+| `price`,`price_prev`,`price_delta`,`log_return_1m` | Core index return features. | Basis for risk, volatility, and momentum analytics. |
+
+### Dataset: `l2_m1_features`
+Layer: Gold
+
+| Column | Meaning | Why it matters |
+|---|---|---|
+| `schema_version`,`dataset_type`,`feature_set_version` | Contract/version identifiers. | Reproducibility and controlled evolution. |
+| `exchange`,`symbol`,`instrument_type`,`depth`,`ts_minute` | Minute identity fields. | Deterministic joins and time-series indexing. |
+| `snapshot_count`,`coverage_ratio`,`first_snapshot_ts`,`last_snapshot_ts` | Coverage quality metadata. | Detect sparse/minute-quality issues. |
+| `mid_*`,`spread_bps_*`,`microprice_*` | Minute price/liquidity aggregates. | Robust feature layer for modeling/backtests. |
+| `imbalance_*`,`bid_volume_*`,`ask_volume_*`,`book_pressure_*` | Depth pressure aggregates. | Market microstructure signal compression. |
+| `mark_price_last`,`index_price_last`,`open_interest_last`,`funding_rate_last` | Carry/market context snapshots. | Regime-aware downstream modeling. |
+| `is_complete_minute`,`quality_flags` | Minute quality and fill annotations. | Safe filtering and explainable data quality. |
+
+### Dataset: `option_surface_m1`
+Layer: Gold
+
+| Column | Meaning | Why it matters |
+|---|---|---|
+| `schema_version`,`dataset_type` | Contract and identity fields. | Stable consumer contract. |
+| `exchange`,`instrument_type`,`currency`,`ts_minute`,`month`,`expiry_date` | Surface key dimensions. | Deterministic indexing by tenor/currency/time. |
+| `term_days`,`term_bucket` | Expiry bucket descriptors. | Term-structure analytics. |
+| `atm_iv`,`atm_strike`,`atm_moneyness` | ATM surface anchor fields. | Quick volatility regime reference. |
+| `iv_near_atm_call`,`iv_near_atm_put` | Near-ATM side-specific IVs. | Skew and directional volatility diagnostics. |
+| `open_interest_sum`,`volume_sum`,`contract_count`,`valid_surface_contract_count`,`surface_coverage_ratio` | Surface quality/liquidity metrics. | Fitness checks for trading/research usage. |
+| `skew_slope`,`smile_curvature`,`rr25`,`bf25` | Derived shape metrics. | Compact smile/skew monitoring features. |
+
+### Dataset: `instrument_metadata_daily_summary`
+Layer: Gold
+
+| Column | Meaning | Why it matters |
+|---|---|---|
+| `schema_version`,`dataset_type` | Contract and identity fields. | Stable daily summary contract. |
+| `exchange`,`snapshot_date`,`kind`,`base_currency` | Summary grouping keys. | Daily universe trend tracking by contract family. |
+| `instrument_count` | Total contracts in group. | Universe size monitoring. |
+| `active_instrument_count` | Active contracts in group. | Live tradable-set health. |
+| `option_instrument_count` | Option contracts in group. | Product-mix monitoring. |
+| `mean_strike` | Mean strike in group. | Daily contract-distribution drift signal. |
+
+### Dataset: `index_price_m1_features`
+Layer: Gold
+
+| Column | Meaning | Why it matters |
+|---|---|---|
+| `schema_version`,`dataset_type` | Contract and identity fields. | Stable minute-summary contract. |
+| `exchange`,`index_name`,`ts_minute` | Minute identity keys. | Deterministic index time-series. |
+| `snapshot_count` | Number of silver rows aggregated in minute. | Coverage quality and sparsity checks. |
+| `price_open`,`price_high`,`price_low`,`price_close`,`price_mean` | OHLC-style minute aggregates. | Core intraminute state for analytics. |
+| `log_return_1m_mean` | Average minute log-return signal. | Volatility/momentum feature for downstream models. |
+
 
 ## Testing
 

@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 
-from ingestion.file_lock import locked_output_path
 from ingestion.instrument_metadata import InstrumentMetadataSnapshotRow
+from ingestion.parquet_repository import ParquetUpsertRepository
 
 InstrumentMetadataPartitionKey = tuple[str, str, str]
 InstrumentMetadataNaturalKey = tuple[str, str, str]
@@ -62,12 +62,7 @@ def save_instrument_metadata_snapshot_parquet_lake(
     lake_root: str,
 ) -> list[str]:
     """Persist daily instrument metadata rows as idempotent bronze parquet files."""
-
-    try:
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-    except ImportError as exc:
-        raise RuntimeError("pyarrow is required for parquet lake output. Install project dependencies.") from exc
+    repository = ParquetUpsertRepository()
 
     grouped: defaultdict[InstrumentMetadataPartitionKey, list[dict[str, object]]] = defaultdict(list)
     for rows in rows_by_date.values():
@@ -82,21 +77,13 @@ def save_instrument_metadata_snapshot_parquet_lake(
     written_files: list[str] = []
     for key, records in grouped.items():
         part_dir = instrument_metadata_partition_path(lake_root=lake_root, key=key)
-        part_dir.mkdir(parents=True, exist_ok=True)
         file_path = part_dir / "data.parquet"
-        with locked_output_path(file_path):
-            existing_rows: list[dict[str, object]] = []
-            if file_path.exists():
-                existing_rows = pq.ParquetFile(file_path).read().to_pylist()  # type: ignore[no-untyped-call]
-            merged: dict[InstrumentMetadataNaturalKey, dict[str, object]] = {
-                _natural_key(record): record for record in existing_rows
-            }
-            for record in records:
-                merged[_natural_key(record)] = record
-            output_rows = sorted(merged.values(), key=lambda item: str(item["instrument_name"]))
-            table = pa.Table.from_pylist(output_rows)
-            staging = part_dir / ".staging-data.parquet"
-            pq.write_table(table, staging)  # type: ignore[no-untyped-call]
-            staging.replace(file_path)
-        written_files.append(str(file_path.resolve()))
+        written_files.append(
+            repository.upsert(
+                file_path=file_path,
+                records=records,
+                natural_key=lambda item: _natural_key(item),
+                sort_key=lambda item: str(item["instrument_name"]),
+            )
+        )
     return sorted(written_files)

@@ -10,8 +10,8 @@ import polars as pl
 
 from ingestion.artifact_io import timestamp_bounds_iso, write_json_artifact
 from ingestion.artifact_state import file_fingerprints, load_json_state, write_json_state
-from ingestion.file_lock import locked_output_path
 from ingestion.incremental import inputs_unchanged
+from ingestion.polars_parquet_store import upsert_partition_parquet
 
 OPTION_SURFACE_DATASET_TYPE = "option_surface_m1"
 OPTION_SURFACE_SCHEMA_VERSION = "v1"
@@ -203,16 +203,14 @@ def write_option_surface_m1_artifacts(
         )
         out_dir.mkdir(parents=True, exist_ok=True)
         parquet_path = out_dir / f"{month}.parquet"
-        staging_path = out_dir / f".staging-{datetime.now().strftime('%Y%m%dT%H%M%S%f')}.parquet"
         json_path = out_dir / f"{month}.json"
         png_path = out_dir / f"{month}.png"
-        with locked_output_path(parquet_path):
-            output = part
-            if parquet_path.exists():
-                output = pl.concat([pl.read_parquet(parquet_path), part], how="vertical")
-            output = output.unique(subset=OPTION_SURFACE_NATURAL_KEY, keep="last").sort("ts_minute")
-            output.write_parquet(staging_path)
-            staging_path.replace(parquet_path)
+        output = upsert_partition_parquet(
+            file_path=parquet_path,
+            partition=part,
+            natural_key=OPTION_SURFACE_NATURAL_KEY,
+            sort_by="ts_minute",
+        )
         written_files.append(str(parquet_path.resolve()))
         if manifest:
             write_json_artifact(json_path, option_surface_metadata(output))

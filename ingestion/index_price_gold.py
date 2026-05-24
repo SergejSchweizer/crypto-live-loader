@@ -2,13 +2,13 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from pathlib import Path
 
 import polars as pl
 
 from ingestion.artifact_state import file_fingerprints, load_json_state, write_json_state
 from ingestion.incremental import inputs_unchanged
+from ingestion.polars_parquet_store import upsert_partition_parquet
 
 INDEX_PRICE_GOLD_DATASET_TYPE = "index_price_m1_features"
 INDEX_PRICE_GOLD_SCHEMA_VERSION = "v1"
@@ -115,12 +115,11 @@ def _write_gold_index_price(gold: pl.DataFrame, lake_root: str) -> list[str]:
         )
         out_dir.mkdir(parents=True, exist_ok=True)
         file_path = out_dir / "data.parquet"
-        output = partition
-        if file_path.exists():
-            output = pl.concat([pl.read_parquet(file_path), partition], how="vertical")
-        output = output.unique(subset=INDEX_PRICE_GOLD_NATURAL_KEY, keep="last").sort("ts_minute")
-        staging = out_dir / f".staging-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%f')}.parquet"
-        output.write_parquet(staging)
-        staging.replace(file_path)
+        upsert_partition_parquet(
+            file_path=file_path,
+            partition=partition,
+            natural_key=INDEX_PRICE_GOLD_NATURAL_KEY,
+            sort_by="ts_minute",
+        )
         written_files.append(str(file_path.resolve()))
     return sorted(written_files)

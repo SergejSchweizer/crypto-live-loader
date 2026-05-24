@@ -7,8 +7,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import cast
 
-from ingestion.file_lock import locked_output_path
 from ingestion.index_price import IndexPriceSnapshotRow
+from ingestion.parquet_repository import ParquetUpsertRepository
 
 IndexPricePartitionKey = tuple[str, str, str, str, str]
 IndexPriceNaturalKey = tuple[str, str, datetime, str]
@@ -63,12 +63,7 @@ def save_index_price_snapshot_parquet_lake(
     lake_root: str,
 ) -> list[str]:
     """Persist index price rows into idempotent parquet partitions."""
-
-    try:
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-    except ImportError as exc:
-        raise RuntimeError("pyarrow is required for parquet lake output. Install project dependencies.") from exc
+    repository = ParquetUpsertRepository()
 
     grouped: defaultdict[IndexPricePartitionKey, list[dict[str, object]]] = defaultdict(list)
     for rows in rows_by_index.values():
@@ -85,21 +80,13 @@ def save_index_price_snapshot_parquet_lake(
     written_files: list[str] = []
     for key, records in grouped.items():
         part_dir = index_price_partition_path(lake_root=lake_root, key=key)
-        part_dir.mkdir(parents=True, exist_ok=True)
         file_path = part_dir / "data.parquet"
-        with locked_output_path(file_path):
-            existing_rows: list[dict[str, object]] = []
-            if file_path.exists():
-                existing_rows = pq.ParquetFile(file_path).read().to_pylist()  # type: ignore[no-untyped-call]
-            merged: dict[IndexPriceNaturalKey, dict[str, object]] = {
-                _natural_key(existing_record): existing_record for existing_record in existing_rows
-            }
-            for record in records:
-                merged[_natural_key(record)] = record
-            output_rows = sorted(merged.values(), key=lambda item: cast(datetime, item["event_time"]))
-            table = pa.Table.from_pylist(output_rows)
-            staging = part_dir / ".staging-data.parquet"
-            pq.write_table(table, staging)  # type: ignore[no-untyped-call]
-            staging.replace(file_path)
-        written_files.append(str(file_path.resolve()))
+        written_files.append(
+            repository.upsert(
+                file_path=file_path,
+                records=records,
+                natural_key=lambda item: _natural_key(item),
+                sort_key=lambda item: cast(datetime, item["event_time"]),
+            )
+        )
     return sorted(written_files)
