@@ -20,4 +20,3 @@ def test_source_adapter_for_exchange_rejects_unknown_exchange() -> None:
 
     with pytest.raises(ValueError, match="Unsupported exchange"):
         source_adapter_for_exchange("unknown")
-

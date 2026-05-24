@@ -7,8 +7,10 @@ from pathlib import Path
 from typing import Any, TypeAlias, cast
 
 Config: TypeAlias = dict[str, Any]
+DEFAULT_LOGFILE = ".logs/crypto-live-loader.log"
 
 DEFAULT_CONFIG: Config = {
+    "logfile": DEFAULT_LOGFILE,
     "http": {
         "timeout_s": 8,
         "max_retries": 2,
@@ -184,3 +186,15 @@ def config_str_list(section: Config, name: str, default: list[str]) -> list[str]
         values = [item.strip() for item in value.replace(",", " ").split() if item.strip()]
         return values or default
     return default
+
+
+def configured_logfile_path(config: Config, default_name: str = "crypto-live-loader.log") -> Path:
+    """Resolve the shared logfile path from top-level config or runtime fallback."""
+
+    logfile = config.get("logfile")
+    if isinstance(logfile, str) and logfile.strip():
+        return Path(logfile.strip())
+
+    runtime_config = config_section(config, "runtime")
+    log_dir = config_str(runtime_config, "log_dir", ".logs")
+    return Path(log_dir) / default_name

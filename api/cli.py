@@ -16,6 +16,8 @@ from api.constants import (
     BRONZE_BUILDER_COMMAND,
     GOLD_BUILDER_COMMAND,
     LEGACY_BRONZE_BUILDER_COMMAND,
+    LEGACY_GOLD_BUILDER_COMMAND,
+    LEGACY_SILVER_BUILDER_COMMAND,
     OPTIONS_BRONZE_BUILDER_COMMAND,
     OPTIONS_GOLD_BUILDER_COMMAND,
     OPTIONS_SILVER_BUILDER_COMMAND,
@@ -157,11 +159,13 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         default="deribit",
     )
     options_parser.add_argument(
+        "--symbols",
         "--currencies",
+        dest="currencies",
         nargs="+",
         default=config_str_list(options_config, "currencies", ["BTC", "ETH", "SOL"]),
         type=str,
-        help="Option currencies to fetch, separated by spaces or commas",
+        help="Option symbols/currencies to fetch, separated by spaces or commas",
     )
     options_parser.add_argument(
         "--lake-root",
@@ -171,7 +175,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
     options_parser.add_argument(
         "--save-parquet-lake",
         action=argparse.BooleanOptionalAction,
-        default=config_bool(options_config, "save_parquet_lake", True),
+        default=True,
         help="Save raw option ticker snapshots to bronze parquet lake partitions",
     )
     options_parser.add_argument(
@@ -250,6 +254,18 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
     )
     _boolean_optional_flag(
         options_gold_parser,
+        "fill-missing-minutes",
+        False,
+        "Enable or disable options Gold missing-minute filling",
+    )
+    options_gold_parser.add_argument(
+        "--fill-policy",
+        choices=["neighbor", "hybrid", "kalman"],
+        default="neighbor",
+        help="Gap-filling policy used when --fill-missing-minutes is enabled",
+    )
+    _boolean_optional_flag(
+        options_gold_parser,
         "json-output",
         config_bool(options_config, "json_output", config_bool(ingestion_config, "json_output", True)),
         "Print JSON output",
@@ -257,6 +273,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
 
     silver_parser = subparsers.add_parser(
         SILVER_BUILDER_COMMAND,
+        aliases=[LEGACY_SILVER_BUILDER_COMMAND],
         help="Transform bronze L2 snapshots into monthly silver feature artifacts",
     )
     silver_parser.add_argument(
@@ -296,6 +313,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
 
     gold_parser = subparsers.add_parser(
         GOLD_BUILDER_COMMAND,
+        aliases=[LEGACY_GOLD_BUILDER_COMMAND],
         help="Transform silver L2 features into per-symbol gold M1 artifacts",
     )
     gold_parser.add_argument(
@@ -778,7 +796,7 @@ def _run_silver_builder(args: argparse.Namespace, logger: logging.Logger) -> Non
     }
     _emit_json_output(bool(args.json_output), output)
     logger.info(
-        "silver-builder run summary status=complete elapsed_s=%.3f bronze_lake_root=%s "
+        "l2-silver-builder run summary status=complete elapsed_s=%.3f bronze_lake_root=%s "
         "silver_lake_root=%s depth=%s artifact_files=%s",
         elapsed_s,
         bronze_lake_root,
@@ -799,6 +817,8 @@ def _run_options_gold_builder(args: argparse.Namespace, logger: logging.Logger) 
         gold_lake_root=gold_lake_root,
         plot=bool(args.plot),
         manifest=bool(args.manifest),
+        fill_missing_minutes=bool(args.fill_missing_minutes),
+        fill_policy=cast(str, args.fill_policy),
     )
     elapsed_s = perf_counter() - started_at
     output = {
@@ -806,15 +826,19 @@ def _run_options_gold_builder(args: argparse.Namespace, logger: logging.Logger) 
         "status": "complete",
         "silver_lake_root": silver_lake_root,
         "gold_lake_root": gold_lake_root,
+        "fill_missing_minutes": bool(args.fill_missing_minutes),
+        "fill_policy": cast(str, args.fill_policy),
         "artifact_files": written_files,
     }
     _emit_json_output(bool(args.json_output), output)
     logger.info(
         "options-gold-builder run summary status=complete elapsed_s=%.3f silver_lake_root=%s "
-        "gold_lake_root=%s artifact_files=%s",
+        "gold_lake_root=%s fill_missing_minutes=%s fill_policy=%s artifact_files=%s",
         elapsed_s,
         silver_lake_root,
         gold_lake_root,
+        bool(args.fill_missing_minutes),
+        cast(str, args.fill_policy),
         len(written_files),
     )
 
@@ -851,7 +875,7 @@ def _run_gold_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
     }
     _emit_json_output(bool(args.json_output), output)
     logger.info(
-        "gold-builder run summary status=complete elapsed_s=%.3f silver_lake_root=%s "
+        "l2-gold-builder run summary status=complete elapsed_s=%.3f silver_lake_root=%s "
         "gold_lake_root=%s expected_snapshots_per_minute=%s completeness_threshold=%.3f "
         "fill_missing_minutes=%s fill_policy=%s artifact_files=%s",
         elapsed_s,
@@ -941,9 +965,9 @@ def main() -> None:
         _run_options_silver_builder(args=args, logger=logger)
     elif args.command == OPTIONS_GOLD_BUILDER_COMMAND:
         _run_options_gold_builder(args=args, logger=logger)
-    elif args.command == SILVER_BUILDER_COMMAND:
+    elif args.command in {SILVER_BUILDER_COMMAND, LEGACY_SILVER_BUILDER_COMMAND}:
         _run_silver_builder(args=args, logger=logger)
-    elif args.command == GOLD_BUILDER_COMMAND:
+    elif args.command in {GOLD_BUILDER_COMMAND, LEGACY_GOLD_BUILDER_COMMAND}:
         _run_gold_builder(args=args, logger=logger)
     elif args.command == VALIDATE_SYMBOLS_COMMAND:
         _run_validate_symbols(args=args, logger=logger)

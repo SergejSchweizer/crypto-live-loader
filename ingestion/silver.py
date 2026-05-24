@@ -11,6 +11,7 @@ import polars as pl
 
 from ingestion.artifact_io import write_json_artifact
 from ingestion.artifact_state import file_fingerprints, load_json_state, write_json_state
+from ingestion.file_lock import locked_output_path
 from ingestion.incremental import changed_input_files, inputs_unchanged
 
 SILVER_L2_FEATURE_DATASET_TYPE = "l2_snapshot_features"
@@ -223,14 +224,15 @@ def save_silver_l2_snapshot_features(
         metadata_path = part_dir / f"{month_partition}.json"
         plot_path = part_dir / f"{month_partition}.png"
         legacy_file_path = part_dir / "data.parquet"
-        output = partition
-        existing_file_path = file_path if file_path.exists() else legacy_file_path
-        if existing_file_path.exists():
-            output = pl.concat([pl.read_parquet(existing_file_path), partition], how="vertical")
+        with locked_output_path(file_path):
+            output = partition
+            existing_file_path = file_path if file_path.exists() else legacy_file_path
+            if existing_file_path.exists():
+                output = pl.concat([pl.read_parquet(existing_file_path), partition], how="vertical")
 
-        output = output.unique(subset=SILVER_NATURAL_KEY, keep="last").sort("ts_event")
-        output.write_parquet(staging_path)
-        staging_path.replace(file_path)
+            output = output.unique(subset=SILVER_NATURAL_KEY, keep="last").sort("ts_event")
+            output.write_parquet(staging_path)
+            staging_path.replace(file_path)
 
         written_files.append(str(file_path.resolve()))
         if manifest:
@@ -257,9 +259,7 @@ def silver_artifact_metadata(silver: pl.DataFrame) -> dict[str, Any]:
         "timestamp_min": ts_min,
         "timestamp_max": ts_max,
         "symbols": (
-            sorted(str(symbol) for symbol in silver["symbol"].unique().to_list())
-            if "symbol" in silver.columns
-            else []
+            sorted(str(symbol) for symbol in silver["symbol"].unique().to_list()) if "symbol" in silver.columns else []
         ),
         "columns": [_column_metadata(silver, column) for column in silver.columns],
     }
@@ -274,9 +274,7 @@ def write_silver_profile_png(silver: pl.DataFrame, path: Path) -> None:
     import matplotlib.pyplot as plt
 
     numeric_features = [
-        column
-        for column in silver.columns
-        if silver[column].dtype.is_numeric() and column not in {"depth"}
+        column for column in silver.columns if silver[column].dtype.is_numeric() and column not in {"depth"}
     ]
     if not numeric_features:
         path.touch()
@@ -345,10 +343,7 @@ def _imbalance_exprs() -> list[pl.Expr]:
         ask = pl.col(f"ask_volume_{window}")
         denominator = bid + ask
         expressions.append(
-            pl.when(denominator > 0)
-            .then((bid - ask) / denominator)
-            .otherwise(None)
-            .alias(f"imbalance_{window}")
+            pl.when(denominator > 0).then((bid - ask) / denominator).otherwise(None).alias(f"imbalance_{window}")
         )
     return expressions
 
@@ -360,10 +355,7 @@ def _microprice_expr() -> pl.Expr:
     return (
         pl.when(denominator > 0)
         .then(
-            (
-                pl.col("best_bid_price") * pl.col("best_ask_size")
-                + pl.col("best_ask_price") * pl.col("best_bid_size")
-            )
+            (pl.col("best_bid_price") * pl.col("best_ask_size") + pl.col("best_ask_price") * pl.col("best_bid_size"))
             / denominator
         )
         .otherwise(None)

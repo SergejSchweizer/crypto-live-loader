@@ -1,2 +1,1 @@
 """Deribit source adapter package."""
-

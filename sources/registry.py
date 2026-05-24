@@ -12,4 +12,3 @@ def source_adapter_for_exchange(exchange: str) -> SourceAdapter:
     if exchange == "deribit":
         return DeribitAdapter()
     raise ValueError(f"Unsupported exchange '{exchange}'")
-

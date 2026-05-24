@@ -10,12 +10,21 @@ import polars as pl
 
 from ingestion.artifact_io import timestamp_bounds_iso, write_json_artifact
 from ingestion.artifact_state import file_fingerprints, load_json_state, write_json_state
+from ingestion.file_lock import locked_output_path
 from ingestion.incremental import inputs_unchanged
 
 OPTION_SURFACE_DATASET_TYPE = "option_surface_m1"
 OPTION_SURFACE_SCHEMA_VERSION = "v1"
 OPTION_SURFACE_STATE_FILE_NAME = "_gold_options_transform_state.json"
 OPTION_SURFACE_NATURAL_KEY = ["ts_minute", "currency", "expiry_date"]
+OPTION_GOLD_FILL_POLICY_NEIGHBOR = "neighbor"
+OPTION_GOLD_FILL_POLICY_HYBRID = "hybrid"
+OPTION_GOLD_FILL_POLICY_KALMAN = "kalman"
+OPTION_GOLD_FILL_POLICIES = (
+    OPTION_GOLD_FILL_POLICY_NEIGHBOR,
+    OPTION_GOLD_FILL_POLICY_HYBRID,
+    OPTION_GOLD_FILL_POLICY_KALMAN,
+)
 
 
 def option_gold_transform_state_path(gold_lake_root: str) -> Path:
@@ -35,8 +44,13 @@ def transform_option_silver_to_gold(
     gold_lake_root: str,
     plot: bool = True,
     manifest: bool = True,
+    fill_missing_minutes: bool = False,
+    fill_policy: str = OPTION_GOLD_FILL_POLICY_NEIGHBOR,
 ) -> list[str]:
     """Transform options Silver rows into Gold option surface artifacts."""
+
+    if fill_policy not in OPTION_GOLD_FILL_POLICIES:
+        raise ValueError(f"Unsupported fill policy '{fill_policy}'")
 
     silver_files = option_silver_parquet_files(silver_lake_root)
     if not silver_files:
@@ -46,7 +60,10 @@ def transform_option_silver_to_gold(
     current_fingerprints = file_fingerprints(silver_files)
     state = load_json_state(state_path)
     previous_fingerprints = state.get("silver_inputs", {})
-    if inputs_unchanged(previous_fingerprints, current_fingerprints):
+    transform_settings_unchanged = (
+        state.get("fill_missing_minutes") == fill_missing_minutes and state.get("fill_policy") == fill_policy
+    )
+    if transform_settings_unchanged and inputs_unchanged(previous_fingerprints, current_fingerprints):
         return []
 
     silver = pl.read_parquet([str(path) for path in silver_files])
@@ -64,6 +81,8 @@ def transform_option_silver_to_gold(
             "silver_lake_root": str(Path(silver_lake_root).resolve()),
             "gold_lake_root": str(Path(gold_lake_root).resolve()),
             "silver_inputs": current_fingerprints,
+            "fill_missing_minutes": fill_missing_minutes,
+            "fill_policy": fill_policy,
             "last_written_files": written_files,
         },
     )
@@ -187,12 +206,13 @@ def write_option_surface_m1_artifacts(
         staging_path = out_dir / f".staging-{datetime.now().strftime('%Y%m%dT%H%M%S%f')}.parquet"
         json_path = out_dir / f"{month}.json"
         png_path = out_dir / f"{month}.png"
-        output = part
-        if parquet_path.exists():
-            output = pl.concat([pl.read_parquet(parquet_path), part], how="vertical")
-        output = output.unique(subset=OPTION_SURFACE_NATURAL_KEY, keep="last").sort("ts_minute")
-        output.write_parquet(staging_path)
-        staging_path.replace(parquet_path)
+        with locked_output_path(parquet_path):
+            output = part
+            if parquet_path.exists():
+                output = pl.concat([pl.read_parquet(parquet_path), part], how="vertical")
+            output = output.unique(subset=OPTION_SURFACE_NATURAL_KEY, keep="last").sort("ts_minute")
+            output.write_parquet(staging_path)
+            staging_path.replace(parquet_path)
         written_files.append(str(parquet_path.resolve()))
         if manifest:
             write_json_artifact(json_path, option_surface_metadata(output))

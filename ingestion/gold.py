@@ -14,6 +14,7 @@ from typing import Any
 import polars as pl
 
 from ingestion.artifact_state import file_fingerprints, load_json_state, write_json_state
+from ingestion.file_lock import locked_output_path
 
 GOLD_FEATURE_SET_VERSION = "gold_l2_m1_v1"
 GOLD_L2_M1_DATASET_TYPE = "l2_m1_features"
@@ -389,9 +390,7 @@ def fill_gold_missing_minutes_kalman(gold: pl.DataFrame) -> pl.DataFrame:
     for partition in hybrid.partition_by(GOLD_DATASET_PARTITION_COLUMNS):
         rows = partition.sort("ts_minute").to_dicts()
         long_runs = [
-            (start, end)
-            for start, end in _missing_runs(rows)
-            if end - start + 1 >= GOLD_KALMAN_LONG_GAP_MINUTES
+            (start, end) for start, end in _missing_runs(rows) if end - start + 1 >= GOLD_KALMAN_LONG_GAP_MINUTES
         ]
         if not long_runs:
             filled_frames.append(partition.sort("ts_minute"))
@@ -774,33 +773,34 @@ def write_gold_l2_m1_artifacts(
         json_path = dataset_dir / f"{basename}.json"
         png_path = dataset_dir / f"{basename}.png"
 
-        symbol_frame.write_parquet(parquet_path)
-        written_files.append(str(parquet_path.resolve()))
+        with locked_output_path(parquet_path):
+            symbol_frame.write_parquet(parquet_path)
+            written_files.append(str(parquet_path.resolve()))
 
-        metadata: dict[str, Any] | None = None
-        if manifest or plot:
-            metadata = gold_metadata(
-                gold=symbol_frame,
-                source_summary=source_symbol_summary,
-                hash_string=hash_string,
-                git_commit_hash=git_commit_hash,
-                expected_snapshots_per_minute=expected_snapshots_per_minute,
-                completeness_threshold=completeness_threshold,
-                feature_set_version=identity.feature_set_version,
-                source_fingerprints=source_fingerprints or {},
-                gold_content_hash=gold_content_hash,
-                fill_missing_minutes=fill_missing_minutes,
-                fill_policy=fill_policy,
-            )
+            metadata: dict[str, Any] | None = None
+            if manifest or plot:
+                metadata = gold_metadata(
+                    gold=symbol_frame,
+                    source_summary=source_symbol_summary,
+                    hash_string=hash_string,
+                    git_commit_hash=git_commit_hash,
+                    expected_snapshots_per_minute=expected_snapshots_per_minute,
+                    completeness_threshold=completeness_threshold,
+                    feature_set_version=identity.feature_set_version,
+                    source_fingerprints=source_fingerprints or {},
+                    gold_content_hash=gold_content_hash,
+                    fill_missing_minutes=fill_missing_minutes,
+                    fill_policy=fill_policy,
+                )
 
-        if manifest:
-            json_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
-            written_files.append(str(json_path.resolve()))
+            if manifest:
+                json_path.write_text(json.dumps(metadata, indent=2, sort_keys=True), encoding="utf-8")
+                written_files.append(str(json_path.resolve()))
 
-        if plot:
-            assert metadata is not None
-            write_gold_profile_png(gold=symbol_frame, metadata=metadata, path=png_path)
-            written_files.append(str(png_path.resolve()))
+            if plot:
+                assert metadata is not None
+                write_gold_profile_png(gold=symbol_frame, metadata=metadata, path=png_path)
+                written_files.append(str(png_path.resolve()))
 
     return sorted(written_files)
 
@@ -1012,9 +1012,7 @@ def gold_plot_metadata_lines(metadata: dict[str, Any], gold: pl.DataFrame) -> li
     source_summary = metadata.get("source_silver_dataset_summaries", {})
     source_symbols = source_summary.get("source_symbols", []) if isinstance(source_summary, dict) else []
     source_symbol_text = ", ".join(
-        f"{item.get('source_symbol')}:{item.get('row_count')}"
-        for item in source_symbols
-        if isinstance(item, dict)
+        f"{item.get('source_symbol')}:{item.get('row_count')}" for item in source_symbols if isinstance(item, dict)
     )
     symbol = str(gold["symbol"][0]) if gold.height and "symbol" in gold.columns else "unknown"
     exchange = str(gold["exchange"][0]) if gold.height and "exchange" in gold.columns else "unknown"
@@ -1054,12 +1052,7 @@ def gold_plot_sample(gold: pl.DataFrame, max_points: int = GOLD_PLOT_MAX_POINTS)
     if max_points == 1:
         return gold.head(1)
 
-    sampled_indices = sorted(
-        {
-            round(index * (gold.height - 1) / (max_points - 1))
-            for index in range(max_points)
-        }
-    )
+    sampled_indices = sorted({round(index * (gold.height - 1) / (max_points - 1)) for index in range(max_points)})
     return gold.with_row_index("_plot_index").filter(pl.col("_plot_index").is_in(sampled_indices)).drop("_plot_index")
 
 
@@ -1192,8 +1185,7 @@ def _missing_minute_timestamps(gold: pl.DataFrame) -> list[datetime]:
     return [
         row["ts_minute"]
         for row in rows
-        if isinstance(row["ts_minute"], datetime)
-        and _is_unfilled_missing_minute_row(row)
+        if isinstance(row["ts_minute"], datetime) and _is_unfilled_missing_minute_row(row)
     ]
 
 
@@ -1276,10 +1268,7 @@ def _book_pressure_exprs() -> list[pl.Expr]:
         ask = pl.col(f"ask_volume_{window}")
         denominator = bid + ask
         expressions.append(
-            pl.when(denominator > 0)
-            .then(bid / denominator)
-            .otherwise(None)
-            .alias(f"book_pressure_{window}")
+            pl.when(denominator > 0).then(bid / denominator).otherwise(None).alias(f"book_pressure_{window}")
         )
     return expressions
 

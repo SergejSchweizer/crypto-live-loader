@@ -27,4 +27,3 @@ class RawSnapshot:
     open_interest: float | None
     funding_8h: float | None
     current_funding: float | None
-

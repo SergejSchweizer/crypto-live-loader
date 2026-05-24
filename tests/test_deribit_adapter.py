@@ -44,4 +44,3 @@ def test_deribit_adapter_fetch_snapshot_returns_canonical_payload(monkeypatch: p
     assert result.symbol == "BTC-PERPETUAL"
     assert result.bids[0].price == 100.0
     assert result.asks[0].amount == 2.0
-

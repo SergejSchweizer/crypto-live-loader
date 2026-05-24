@@ -10,8 +10,8 @@ Current scope is intentionally narrow:
 - Fetch Deribit perpetual L2 order book snapshots through the public REST API.
 - Poll multiple symbols concurrently with bounded runtime controls.
 - Optionally persist raw snapshots to idempotent daily bronze Parquet partitions.
-- Expose ingestion and transform CLI commands: `l2-bronze-builder`, `options-bronze-builder`, `silver-builder`,
-  `options-silver-builder`, `gold-builder`, and `options-gold-builder`.
+- Expose ingestion and transform CLI commands: `l2-bronze-builder`, `options-bronze-builder`, `l2-silver-builder`,
+  `options-silver-builder`, `l2-gold-builder`, and `options-gold-builder`.
 - Validate symbol aliases before scheduled jobs with `validate-symbols`.
 
 Former OHLCV, standalone open-interest, standalone funding, research-report, and database-ingestion surfaces have been removed.
@@ -33,10 +33,10 @@ CLI (validate-symbols)
   -> Valid book report
 
 Lake transform
-  -> silver-builder CLI command
+  -> l2-silver-builder CLI command
   -> Polars Bronze-to-Silver snapshot feature transform
   -> Monthly silver Parquet, JSON metadata, and PNG profile artifacts
-  -> gold-builder CLI command
+  -> l2-gold-builder CLI command
   -> Polars Silver-to-Gold M1 aggregation
   -> Optional missing-minute numeric fill from adjacent Gold minute averages
   -> Versioned full-timeframe Gold Parquet, JSON metadata, and PNG profile artifacts
@@ -105,10 +105,11 @@ Supported config keys:
 
 | Key | Purpose |
 |---|---|
+| `logfile` | Shared logfile path used by CLI commands and scripts. Defaults to `.logs/crypto-live-loader.log`. |
 | `http.timeout_s` | HTTP request timeout in seconds. Defaults to `8`. |
 | `http.max_retries` | Retry count for transient request failures. Defaults to `2`. |
 | `http.retry_backoff_s` | Base retry backoff in seconds. Defaults to `1`. |
-| `runtime.log_dir` | Runtime log directory. Defaults to repo-local `.logs/`. |
+| `runtime.log_dir` | Fallback log directory used only when `logfile` is unset. Defaults to repo-local `.logs/`. |
 | `runtime.log_rotation_days` | Log rotation interval in days. Defaults to `7` for weekly rotation. |
 | `runtime.log_backup_count` | Number of rotated logs to delete after. `0` keeps older logs indefinitely. |
 | `runtime.fetch_concurrency` | Maximum concurrent symbol fetches per polling tick. |
@@ -137,21 +138,21 @@ The production cron setup runs the three data-layer builders once per minute fro
 
 ```cron
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py l2-bronze-builder --symbols BTC ETH SOL
-* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-bronze-builder --currencies BTC ETH SOL --save-parquet-lake
-* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py silver-builder
+* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-bronze-builder --symbols BTC ETH SOL --save-parquet-lake
+* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py l2-silver-builder
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-silver-builder
-* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py gold-builder
+* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py l2-gold-builder
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-gold-builder
 ```
 
 | Job | Purpose | Reads | Writes | Log File |
 |---|---|---|---|---|
-| `l2-bronze-builder` | Poll Deribit REST L2 snapshots for BTC, ETH, and SOL. | Deribit public order book API. | Daily Bronze Parquet partitions under `lake/bronze/`. | `.logs/l2-bronze-builder.log` (legacy alias: `.logs/bronze-builder.log`) |
-| `options-bronze-builder` | Fetch Deribit options chain ticker snapshots for BTC/ETH/SOL and write raw Bronze rows. | Deribit `public/get_book_summary_by_currency` (SOL via `USDC` filtered to `SOL_USDC-`). | Daily Bronze Parquet partitions under `lake/bronze/dataset_type=option_ticker_snapshot_1m/`. | `.logs/options-bronze-builder.log` |
-| `silver-builder` | Transform changed Bronze snapshots into fixed-width Silver snapshot feature rows. | `lake/bronze/` | Monthly Silver Parquet, JSON metadata, PNG profile artifacts, and `_silver_transform_state.json` under `lake/silver/`. | `.logs/silver-builder.log` |
-| `options-silver-builder` | Transform changed Bronze options snapshots into Silver option-chain feature rows. | `lake/bronze/dataset_type=option_ticker_snapshot_1m/` | Monthly Silver Parquet, JSON metadata, PNG profile artifacts, and `_silver_options_transform_state.json` under `lake/silver/`. | `.logs/options-silver-builder.log` |
-| `gold-builder` | Aggregate changed Silver symbol partitions into dense M1 Gold datasets. | `lake/silver/` | Versioned timeframe Parquet, JSON metadata, PNG profile artifacts, and `_gold_transform_state.json` under `lake/gold/`. | `.logs/gold-builder.log` |
-| `options-gold-builder` | Aggregate options Silver rows into minute-level Gold option surface features. | `lake/silver/dataset_type=option_chain_features_1m/` | Monthly Gold Parquet, JSON metadata, PNG profile artifacts, and `_gold_options_transform_state.json` under `lake/gold/`. | `.logs/options-gold-builder.log` |
+| `l2-bronze-builder` | Poll Deribit REST L2 snapshots for BTC, ETH, and SOL. | Deribit public order book API. | Daily Bronze Parquet partitions under `lake/bronze/`. | Shared `logfile` path from `config.yaml` |
+| `options-bronze-builder` | Fetch Deribit options chain ticker snapshots for BTC/ETH/SOL and write raw Bronze rows. | Deribit `public/get_book_summary_by_currency` (SOL via `USDC` filtered to `SOL_USDC-`). | Daily Bronze Parquet partitions under `lake/bronze/dataset_type=option_ticker_snapshot_1m/`. | Shared `logfile` path from `config.yaml` |
+| `l2-silver-builder` | Transform changed Bronze snapshots into fixed-width Silver snapshot feature rows. | `lake/bronze/` | Monthly Silver Parquet, JSON metadata, PNG profile artifacts, and `_silver_transform_state.json` under `lake/silver/`. | Shared `logfile` path from `config.yaml` |
+| `options-silver-builder` | Transform changed Bronze options snapshots into Silver option-chain feature rows. | `lake/bronze/dataset_type=option_ticker_snapshot_1m/` | Monthly Silver Parquet, JSON metadata, PNG profile artifacts, and `_silver_options_transform_state.json` under `lake/silver/`. | Shared `logfile` path from `config.yaml` |
+| `l2-gold-builder` | Aggregate changed Silver symbol partitions into dense M1 Gold datasets. | `lake/silver/` | Versioned timeframe Parquet, JSON metadata, PNG profile artifacts, and `_gold_transform_state.json` under `lake/gold/`. | Shared `logfile` path from `config.yaml` |
+| `options-gold-builder` | Aggregate options Silver rows into minute-level Gold option surface features. | `lake/silver/dataset_type=option_chain_features_1m/` | Monthly Gold Parquet, JSON metadata, PNG profile artifacts, and `_gold_options_transform_state.json` under `lake/gold/`. | Shared `logfile` path from `config.yaml` |
 
 Jobs do not use process-level serialization, so overlapping scheduled launches are allowed. Logs rotate weekly, and rotated logs are kept indefinitely by default.
 
@@ -201,12 +202,12 @@ python main.py l2-bronze-builder \
 
 With the defaults, each run collects five raw snapshots per symbol with a 50-second runtime budget. Bronze persistence appends those snapshots as distinct parquet rows in the symbol's daily partition; it does not aggregate them.
 
-Runtime logs are written under `.logs/` by default, for example `.logs/l2-bronze-builder.log` when using the new command name. The legacy alias `bronze-builder` is still accepted and writes `.logs/bronze-builder.log`. The directory is ignored by git. Logs rotate weekly and `runtime.log_backup_count: 0` keeps older rotated logs.
+Runtime logs are written to the shared `logfile` path from `config.yaml` (default: `.logs/crypto-live-loader.log`). When `logfile` is unset, runtime logging falls back to `runtime.log_dir` with the default filename. Logs rotate weekly and `runtime.log_backup_count: 0` keeps older rotated logs.
 
 ### Silver Builder
 
 ```text
-python main.py silver-builder [options]
+python main.py l2-silver-builder [options]
 ```
 
 | Option | Meaning |
@@ -221,10 +222,10 @@ python main.py silver-builder [options]
 Transform Bronze L2 snapshots into monthly Silver snapshot feature artifacts:
 
 ```bash
-python main.py silver-builder
+python main.py l2-silver-builder
 ```
 
-The Silver job logs to `.logs/silver-builder.log` by default.
+The Silver job logs to the shared `logfile` path from `config.yaml`.
 It records Bronze parquet content fingerprints in `lake/silver/_silver_transform_state.json`; subsequent runs read and merge only Bronze partition files whose content changed since the prior successful run.
 
 Each Silver month partition writes three artifacts. The parquet file is named by month, and the metadata/plot files use the same month marker:
@@ -244,7 +245,7 @@ python main.py options-bronze-builder [options]
 | Option | Meaning |
 |---|---|
 | `--exchange {deribit}` | Exchange adapter to use. Currently `deribit` only. |
-| `--currencies CURRENCIES [CURRENCIES ...]` | Option currencies to fetch. Supports space/comma-separated values. |
+| `--symbols SYMBOLS [SYMBOLS ...]` | Option symbols/currencies to fetch. Supports space/comma-separated values. Legacy alias: `--currencies`. |
 | `--lake-root LAKE_ROOT` | Root directory for optional options Bronze Parquet output. |
 | `--save-parquet-lake`, `--no-save-parquet-lake` | Enable or disable options bronze Parquet persistence. |
 | `--schema-version SCHEMA_VERSION` | Schema version marker written to rows. |
@@ -256,7 +257,7 @@ python main.py options-bronze-builder [options]
 Example:
 
 ```bash
-python main.py options-bronze-builder --currencies BTC ETH SOL --save-parquet-lake
+python main.py options-bronze-builder --symbols BTC ETH SOL --save-parquet-lake
 ```
 
 ### Options Silver Builder
@@ -282,7 +283,7 @@ python main.py options-silver-builder
 ### Gold Builder
 
 ```text
-python main.py gold-builder [options]
+python main.py l2-gold-builder [options]
 ```
 
 | Option | Meaning |
@@ -300,7 +301,7 @@ python main.py gold-builder [options]
 Transform Silver L2 snapshot features into M1 Gold artifacts:
 
 ```bash
-python main.py gold-builder
+python main.py l2-gold-builder
 ```
 
 Gold is M1-only. Each dataset is materialized on the full one-minute scale from its lowest observed minute through its latest observed minute. Observed minutes use first/max/min/last/mean/std semantics inside the minute. Missing minutes are written as explicit rows with `snapshot_count = 0`, `coverage_ratio = 0.0`, `is_complete_minute = false`, `quality_flags = ["missing_minute"]`, and numeric feature values set to `NaN`; values are not forward-filled. With the default quality policy, `expected_snapshots_per_minute = 6`, `coverage_ratio = snapshot_count / 6`, and `is_complete_minute = coverage_ratio >= 0.8`.
@@ -348,7 +349,7 @@ Use this profile view as a fast QA pass:
 - If one feature remains fragmented while peers are smooth, inspect source-value finiteness for that feature.
 - If histogram mass shifts abruptly across runs, compare source fingerprint/hash and recent market regime.
 
-The Gold job logs to `.logs/gold-builder.log` by default and allows overlapping transform launches.
+The Gold job logs to the shared `logfile` path from `config.yaml` and allows overlapping transform launches.
 
 ### Options Gold Builder
 
@@ -360,6 +361,8 @@ python main.py options-gold-builder [options]
 |---|---|
 | `--silver-lake-root SILVER_LAKE_ROOT` | Root directory for options Silver Parquet input files. |
 | `--gold-lake-root GOLD_LAKE_ROOT` | Root directory for options Gold artifact output files. |
+| `--fill-missing-minutes`, `--no-fill-missing-minutes` | Enable or disable options Gold missing-minute filling mode. Defaults to disabled. |
+| `--fill-policy {neighbor,hybrid,kalman}` | Fill policy recorded for options Gold runs when filling mode is enabled. Defaults to `neighbor`. |
 | `--plot`, `--no-plot` | Enable or suppress options Gold PNG profile generation. |
 | `--manifest`, `--no-manifest` | Enable or suppress options Gold JSON metadata generation. |
 | `--json-output`, `--no-json-output` | Enable or suppress JSON output. Logs are still emitted. |
@@ -368,6 +371,8 @@ Example:
 
 ```bash
 python main.py options-gold-builder
+
+python main.py options-gold-builder --fill-missing-minutes --fill-policy kalman
 ```
 
 Validate symbols before adding them to cron:

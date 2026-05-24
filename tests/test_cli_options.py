@@ -125,7 +125,7 @@ def test_cli_options_bronze_builder_outputs_json(
         [
             "main.py",
             OPTIONS_BRONZE_BUILDER_COMMAND,
-            "--currencies",
+            "--symbols",
             "BTC,ETH,SOL",
             "--save-parquet-lake",
         ],
@@ -187,7 +187,7 @@ def test_partial_currency_failure_still_writes_successful_assets(
         [
             "main.py",
             OPTIONS_BRONZE_BUILDER_COMMAND,
-            "--currencies",
+            "--symbols",
             "BTC",
             "ETH",
             "SOL",
@@ -202,3 +202,34 @@ def test_partial_currency_failure_still_writes_successful_assets(
     assert output["currency_results"]["BTC"]["rows"] == 1
     assert output["rows_written"] == 2
     assert output["output_files"] == ["/tmp/btc.parquet", "/tmp/sol.parquet"]
+
+
+def test_options_bronze_legacy_currencies_flag_is_still_supported(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Legacy --currencies alias should remain accepted."""
+
+    async def fake_fetch(currencies: list[str], concurrency: int) -> FetchResult:
+        _ = concurrency
+        return ({currency: [] for currency in currencies}, {currency: currency for currency in currencies}, {})
+
+    monkeypatch.setattr(cli, "_fetch_options_rows_for_currencies", fake_fetch)
+    monkeypatch.setattr(
+        cli,
+        "normalize_option_ticker_rows",
+        lambda rows, **kwargs: ([], []),
+    )
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "main.py",
+            OPTIONS_BRONZE_BUILDER_COMMAND,
+            "--currencies",
+            "BTC",
+        ],
+    )
+
+    cli.main()
+    output = json.loads(capsys.readouterr().out)
+    assert output["requested_currencies"] == ["BTC"]

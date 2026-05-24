@@ -51,8 +51,7 @@ def test_silver_l2_snapshot_partition_path_uses_monthly_layout() -> None:
     )
 
     assert str(result).endswith(
-        "dataset_type=l2_snapshot_features/exchange=deribit/instrument_type=perp/"
-        "symbol=BTC-PERPETUAL/month=2026-05"
+        "dataset_type=l2_snapshot_features/exchange=deribit/instrument_type=perp/symbol=BTC-PERPETUAL/month=2026-05"
     )
 
 

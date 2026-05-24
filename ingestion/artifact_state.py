@@ -8,6 +8,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from ingestion.file_lock import locked_output_path
+
 FileFingerprint = dict[str, str | int]
 
 
@@ -48,7 +50,8 @@ def write_json_state(path: Path, payload: dict[str, Any]) -> None:
     """Atomically write a JSON state payload."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    enriched = {**payload, "updated_at_utc": datetime.now(UTC).isoformat()}
-    staging_path = path.with_name(f".{path.name}.staging")
-    staging_path.write_text(json.dumps(enriched, indent=2, sort_keys=True), encoding="utf-8")
-    staging_path.replace(path)
+    with locked_output_path(path):
+        enriched = {**payload, "updated_at_utc": datetime.now(UTC).isoformat()}
+        staging_path = path.with_name(f".{path.name}.staging")
+        staging_path.write_text(json.dumps(enriched, indent=2, sort_keys=True), encoding="utf-8")
+        staging_path.replace(path)

@@ -64,6 +64,9 @@ def test_options_gold_builder_outputs_artifact_files(
             "custom/silver",
             "--gold-lake-root",
             "custom/gold",
+            "--fill-missing-minutes",
+            "--fill-policy",
+            "kalman",
             "--no-plot",
             "--manifest",
         ],
@@ -79,5 +82,7 @@ def test_options_gold_builder_outputs_artifact_files(
             "gold_lake_root": "custom/gold",
             "plot": False,
             "manifest": True,
+            "fill_missing_minutes": True,
+            "fill_policy": "kalman",
         }
     ]

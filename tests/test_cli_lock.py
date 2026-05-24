@@ -11,7 +11,13 @@ from pathlib import Path
 import pytest
 
 from api import cli
-from api.constants import BRONZE_BUILDER_COMMAND, GOLD_BUILDER_COMMAND, SILVER_BUILDER_COMMAND
+from api.constants import (
+    BRONZE_BUILDER_COMMAND,
+    GOLD_BUILDER_COMMAND,
+    LEGACY_GOLD_BUILDER_COMMAND,
+    LEGACY_SILVER_BUILDER_COMMAND,
+    SILVER_BUILDER_COMMAND,
+)
 from api.runtime import configure_logging
 from domain.models import OrderLevel, RawSnapshot
 from ingestion.config import Config
@@ -83,6 +89,26 @@ def test_configure_logging_rotates_weekly_and_keeps_old_logs(tmp_path: Path) -> 
         assert file_handler.when == "D"
         assert file_handler.interval == 7 * 24 * 60 * 60
         assert file_handler.backupCount == 0
+    finally:
+        for handler in list(logger.handlers):
+            handler.close()
+            logger.removeHandler(handler)
+
+
+def test_configure_logging_prefers_shared_logfile_path(tmp_path: Path) -> None:
+    """Verify runtime logging writes to the shared configured logfile."""
+
+    logfile_path = tmp_path / "shared.log"
+    config = _config(log_dir=str(tmp_path / "ignored"))
+    config["logfile"] = str(logfile_path)
+
+    logger = configure_logging(
+        module_name="test-shared-logfile",
+        config=config,
+    )
+    try:
+        file_handler = next(handler for handler in logger.handlers if isinstance(handler, TimedRotatingFileHandler))
+        assert Path(file_handler.baseFilename) == logfile_path
     finally:
         for handler in list(logger.handlers):
             handler.close()
@@ -162,6 +188,13 @@ def test_silver_builder_parser_defaults_can_come_from_config() -> None:
     assert args.json_output is False
 
 
+def test_l2_silver_builder_legacy_alias_is_still_accepted() -> None:
+    """Verify the legacy silver-builder alias still parses."""
+
+    args = cli.build_parser().parse_args([LEGACY_SILVER_BUILDER_COMMAND])
+    assert args.command == LEGACY_SILVER_BUILDER_COMMAND
+
+
 def test_gold_builder_parser_defaults_can_come_from_config() -> None:
     """Verify gold-builder defaults are configurable through config."""
 
@@ -179,6 +212,13 @@ def test_gold_builder_parser_defaults_can_come_from_config() -> None:
     assert args.completeness_threshold == 0.8
     assert args.fill_policy == "neighbor"
     assert args.json_output is False
+
+
+def test_l2_gold_builder_legacy_alias_is_still_accepted() -> None:
+    """Verify the legacy gold-builder alias still parses."""
+
+    args = cli.build_parser().parse_args([LEGACY_GOLD_BUILDER_COMMAND])
+    assert args.command == LEGACY_GOLD_BUILDER_COMMAND
 
 
 def test_warn_for_long_poll_schedule_logs_cron_overlap(caplog: pytest.LogCaptureFixture) -> None:

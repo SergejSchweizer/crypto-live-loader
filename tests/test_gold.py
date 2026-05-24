@@ -372,8 +372,7 @@ def test_write_gold_l2_m1_artifacts_writes_parquet_json_and_png(tmp_path: Path) 
     ]
     assert "path" not in json.dumps(metadata).lower()
     assert any(
-        feature["name"] == "mid_mean" and feature["numeric_stats"]["mean"] == 100.24
-        for feature in metadata["features"]
+        feature["name"] == "mid_mean" and feature["numeric_stats"]["mean"] == 100.24 for feature in metadata["features"]
     )
 
 

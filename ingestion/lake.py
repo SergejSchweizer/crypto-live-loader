@@ -8,6 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import cast
 
+from ingestion.file_lock import locked_output_path
 from ingestion.l2 import (
     L2Snapshot,
     l2_snapshot_partition_key,
@@ -109,16 +110,17 @@ def save_l2_snapshot_parquet_lake(
         part_dir = snapshot_partition_path(lake_root=lake_root, key=key)
         part_dir.mkdir(parents=True, exist_ok=True)
         file_path = part_dir / "data.parquet"
-        staging_path = part_dir / f".staging-{run_id}.parquet"
-        existing_rows: list[dict[str, object]] = []
-        if file_path.exists():
-            existing_table = pq.ParquetFile(file_path).read()  # type: ignore[no-untyped-call]
-            existing_rows = existing_table.to_pylist()
+        with locked_output_path(file_path):
+            staging_path = part_dir / f".staging-{run_id}.parquet"
+            existing_rows: list[dict[str, object]] = []
+            if file_path.exists():
+                existing_table = pq.ParquetFile(file_path).read()  # type: ignore[no-untyped-call]
+                existing_rows = existing_table.to_pylist()
 
-        merged_rows = merge_and_deduplicate_snapshot_rows(existing=existing_rows, new=rows)
-        table = pa.Table.from_pylist(merged_rows)
-        pq.write_table(table, staging_path)  # type: ignore[no-untyped-call]
-        staging_path.replace(file_path)
+            merged_rows = merge_and_deduplicate_snapshot_rows(existing=existing_rows, new=rows)
+            table = pa.Table.from_pylist(merged_rows)
+            pq.write_table(table, staging_path)  # type: ignore[no-untyped-call]
+            staging_path.replace(file_path)
         return str(file_path.resolve())
 
     written_files: list[str] = []
