@@ -2,12 +2,36 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from threading import Event, Lock
 
 import pytest
 
-from ingestion import l2
+from domain.models import OrderLevel, RawSnapshot
 from ingestion.l2 import fetch_l2_snapshots_for_symbols
+
+
+@dataclass(frozen=True)
+class _StubAdapter:
+    source_name: str = "deribit"
+
+    def normalize_symbol(self, symbol: str) -> str:
+        return symbol
+
+    def fetch_snapshot(self, symbol: str, depth: int) -> RawSnapshot:
+        del depth
+        return RawSnapshot(
+            exchange="deribit",
+            symbol=f"{symbol}-PERPETUAL",
+            timestamp_ms=1_700_000_000_000,
+            bids=[OrderLevel(price=100.0, amount=1.0)],
+            asks=[OrderLevel(price=101.0, amount=1.0)],
+            mark_price=100.5,
+            index_price=100.0,
+            open_interest=1000.0,
+            funding_8h=0.0001,
+            current_funding=0.00001,
+        )
 
 
 def test_fetch_l2_snapshots_for_symbols_polls_all_symbols_each_tick(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -15,31 +39,31 @@ def test_fetch_l2_snapshots_for_symbols_polls_all_symbols_each_tick(monkeypatch:
     lock = Lock()
     both_started = Event()
 
-    def fake_fetch_order_book_snapshot(symbol: str, depth: int) -> dict[str, object]:
-        del depth
-        with lock:
-            events.append(("start", symbol))
-            if len([event for event in events if event[0] == "start"]) == 2:
-                both_started.set()
-        both_started.wait(timeout=0.5)
-        with lock:
-            events.append(("finish", symbol))
-            event_count = len(events)
-        timestamp_ms = 1_700_000_000_000 + event_count
-        return {
-            "exchange": "deribit",
-            "symbol": f"{symbol}-PERPETUAL",
-            "timestamp_ms": timestamp_ms,
-            "bids": [(100.0, 1.0)],
-            "asks": [(101.0, 1.0)],
-            "mark_price": 100.5,
-            "index_price": 100.0,
-            "open_interest": 1000.0,
-            "funding_8h": 0.0001,
-            "current_funding": 0.00001,
-        }
+    class Adapter(_StubAdapter):
+        def fetch_snapshot(self, symbol: str, depth: int) -> RawSnapshot:
+            del depth
+            with lock:
+                events.append(("start", symbol))
+                if len([event for event in events if event[0] == "start"]) == 2:
+                    both_started.set()
+            both_started.wait(timeout=0.5)
+            with lock:
+                events.append(("finish", symbol))
+                event_count = len(events)
+            return RawSnapshot(
+                exchange="deribit",
+                symbol=f"{symbol}-PERPETUAL",
+                timestamp_ms=1_700_000_000_000 + event_count,
+                bids=[OrderLevel(price=100.0, amount=1.0)],
+                asks=[OrderLevel(price=101.0, amount=1.0)],
+                mark_price=100.5,
+                index_price=100.0,
+                open_interest=1000.0,
+                funding_8h=0.0001,
+                current_funding=0.00001,
+            )
 
-    monkeypatch.setattr(l2, "fetch_order_book_snapshot", fake_fetch_order_book_snapshot)
+    del monkeypatch
 
     snapshots = fetch_l2_snapshots_for_symbols(
         exchange="deribit",
@@ -48,6 +72,7 @@ def test_fetch_l2_snapshots_for_symbols_polls_all_symbols_each_tick(monkeypatch:
         snapshot_count=1,
         poll_interval_s=0,
         concurrency=2,
+        adapter=Adapter(),
     )
 
     assert events[0][0] == "start"
@@ -57,29 +82,16 @@ def test_fetch_l2_snapshots_for_symbols_polls_all_symbols_each_tick(monkeypatch:
 
 
 def test_fetch_l2_snapshots_for_symbols_logs_and_skips_failed_symbol(
-    monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Verify one failed symbol does not discard the whole polling tick."""
 
-    def fake_fetch_order_book_snapshot(symbol: str, depth: int) -> dict[str, object]:
-        del depth
-        if symbol == "ETH":
-            raise RuntimeError("exchange unavailable")
-        return {
-            "exchange": "deribit",
-            "symbol": f"{symbol}-PERPETUAL",
-            "timestamp_ms": 1_700_000_000_000,
-            "bids": [(100.0, 1.0)],
-            "asks": [(101.0, 1.0)],
-            "mark_price": 100.5,
-            "index_price": 100.0,
-            "open_interest": 1000.0,
-            "funding_8h": 0.0001,
-            "current_funding": 0.00001,
-        }
-
-    monkeypatch.setattr(l2, "fetch_order_book_snapshot", fake_fetch_order_book_snapshot)
+    @dataclass(frozen=True)
+    class Adapter(_StubAdapter):
+        def fetch_snapshot(self, symbol: str, depth: int) -> RawSnapshot:
+            if symbol == "ETH":
+                raise RuntimeError("exchange unavailable")
+            return super().fetch_snapshot(symbol=symbol, depth=depth)
 
     with caplog.at_level("WARNING", logger="ingestion.l2"):
         snapshots = fetch_l2_snapshots_for_symbols(
@@ -89,6 +101,7 @@ def test_fetch_l2_snapshots_for_symbols_logs_and_skips_failed_symbol(
             snapshot_count=1,
             poll_interval_s=0,
             concurrency=2,
+            adapter=Adapter(),
         )
 
     assert len(snapshots["BTC"]) == 1
@@ -103,23 +116,14 @@ def test_fetch_l2_snapshots_for_symbols_respects_expired_runtime_budget(
 
     calls: list[str] = []
 
-    def fake_fetch_order_book_snapshot(symbol: str, depth: int) -> dict[str, object]:
-        del depth
-        calls.append(symbol)
-        return {
-            "exchange": "deribit",
-            "symbol": f"{symbol}-PERPETUAL",
-            "timestamp_ms": 1_700_000_000_000,
-            "bids": [(100.0, 1.0)],
-            "asks": [(101.0, 1.0)],
-            "mark_price": 100.5,
-            "index_price": 100.0,
-            "open_interest": 1000.0,
-            "funding_8h": 0.0001,
-            "current_funding": 0.00001,
-        }
+    from ingestion import l2
 
-    monkeypatch.setattr(l2, "fetch_order_book_snapshot", fake_fetch_order_book_snapshot)
+    @dataclass(frozen=True)
+    class Adapter(_StubAdapter):
+        def fetch_snapshot(self, symbol: str, depth: int) -> RawSnapshot:
+            calls.append(symbol)
+            return super().fetch_snapshot(symbol=symbol, depth=depth)
+
     monkeypatch.setattr(l2, "_deadline_from_config", lambda config: 0.0)
 
     snapshots = fetch_l2_snapshots_for_symbols(
@@ -129,6 +133,7 @@ def test_fetch_l2_snapshots_for_symbols_respects_expired_runtime_budget(
         snapshot_count=1,
         poll_interval_s=0,
         max_runtime_s=1,
+        adapter=Adapter(),
     )
 
     assert calls == []

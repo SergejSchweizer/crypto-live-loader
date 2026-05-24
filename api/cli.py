@@ -19,6 +19,7 @@ from api.runtime import (
     configure_logging,
     fetch_concurrency,
 )
+from domain.models import RawSnapshot
 from ingestion.config import (
     Config,
     config_bool,
@@ -29,11 +30,11 @@ from ingestion.config import (
     config_str_list,
     load_config,
 )
-from ingestion.exchanges.deribit_l2 import fetch_order_book_snapshot, normalize_l2_symbol
 from ingestion.gold import transform_l2_silver_to_gold
 from ingestion.l2 import L2Snapshot, fetch_l2_snapshots_for_symbols
 from ingestion.lake import save_l2_snapshot_parquet_lake
 from ingestion.silver import transform_l2_bronze_to_silver
+from sources.registry import source_adapter_for_exchange
 
 __all__ = ["build_parser", "main"]
 
@@ -59,7 +60,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
 
     config = config or load_config()
     ingestion_config = config_section(config, "ingestion")
-    parser = argparse.ArgumentParser(description="crypto-l2-loader CLI")
+    parser = argparse.ArgumentParser(description="crypto-live-loader CLI")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     l2_parser = subparsers.add_parser(
@@ -545,29 +546,30 @@ def _run_gold_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
     )
 
 
-def _validate_symbol(symbol: str, depth: int) -> dict[str, object]:
-    """Validate one Deribit L2 symbol by fetching a shallow order book."""
+def _valid_top_of_book(snapshot: RawSnapshot) -> bool:
+    """Return whether snapshot top-of-book values are present and ordered."""
 
-    normalized_symbol = normalize_l2_symbol(symbol)
+    if not snapshot.bids or not snapshot.asks:
+        return False
+    top_bid = snapshot.bids[0]
+    top_ask = snapshot.asks[0]
+    return top_bid.price > 0 and top_ask.price > 0 and top_bid.price < top_ask.price
+
+
+def _validate_symbol(exchange: str, symbol: str, depth: int) -> dict[str, object]:
+    """Validate one symbol by fetching a shallow order book from one adapter."""
+
+    adapter = source_adapter_for_exchange(exchange)
+    normalized_symbol = adapter.normalize_symbol(symbol)
     try:
-        snapshot = fetch_order_book_snapshot(symbol=symbol, depth=depth)
-        bids = snapshot["bids"]
-        asks = snapshot["asks"]
-        valid_book = (
-            isinstance(bids, list)
-            and isinstance(asks, list)
-            and bool(bids)
-            and bool(asks)
-            and bids[0][0] > 0
-            and asks[0][0] > 0
-            and bids[0][0] < asks[0][0]
-        )
+        snapshot = adapter.fetch_snapshot(symbol=symbol, depth=depth)
+        valid_book = _valid_top_of_book(snapshot)
         return {
             "symbol": symbol,
-            "normalized_symbol": snapshot["symbol"],
+            "normalized_symbol": snapshot.symbol,
             "valid_book": valid_book,
-            "bid_levels": len(bids) if isinstance(bids, list) else 0,
-            "ask_levels": len(asks) if isinstance(asks, list) else 0,
+            "bid_levels": len(snapshot.bids),
+            "ask_levels": len(snapshot.asks),
             "error": None,
         }
     except Exception as exc:  # noqa: BLE001
@@ -589,9 +591,10 @@ def _run_validate_symbols(args: argparse.Namespace, logger: logging.Logger) -> N
     if depth <= 0:
         raise ValueError("levels must be positive")
 
-    results = [_validate_symbol(symbol=symbol, depth=depth) for symbol in symbols]
+    exchange = cast(str, args.exchange)
+    results = [_validate_symbol(exchange=exchange, symbol=symbol, depth=depth) for symbol in symbols]
     output = {
-        "exchange": cast(str, args.exchange),
+        "exchange": exchange,
         "symbols": results,
         "all_valid": all(bool(item["valid_book"]) for item in results),
     }

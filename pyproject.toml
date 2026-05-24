@@ -3,7 +3,7 @@ requires = ["setuptools>=68", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "crypto-l2-loader"
+name = "crypto-live-loader"
 version = "0.1.0"
 description = "Framework for crypto L2 and market data ingestion"
 readme = "README.md"
@@ -26,6 +26,8 @@ where = ["."]
 include = [
   "ingestion*",
   "api*",
+  "domain*",
+  "sources*",
 ]
 exclude = ["tests*", "notebooks*"]
 

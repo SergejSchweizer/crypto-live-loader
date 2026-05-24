@@ -17,8 +17,12 @@
 # Source and test trees.
 !api/
 !api/**
+!domain/
+!domain/**
 !ingestion/
 !ingestion/**
+!sources/
+!sources/**
 !tests/
 !tests/**
 !docs/

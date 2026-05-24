@@ -13,6 +13,7 @@ import pytest
 from api import cli
 from api.constants import BRONZE_BUILDER_COMMAND, GOLD_BUILDER_COMMAND, SILVER_BUILDER_COMMAND
 from api.runtime import configure_logging
+from domain.models import OrderLevel, RawSnapshot
 from ingestion.config import Config
 from ingestion.l2 import L2Snapshot
 
@@ -27,7 +28,7 @@ def _isolate_cli_test_logs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
 
 def _config(
     *,
-    log_dir: str = "/tmp/crypto-l2-loader-test-logs",
+    log_dir: str = "/tmp/crypto-live-loader-test-logs",
     symbols: list[str] | None = None,
     levels: int = 50,
     snapshot_count: int = 5,
@@ -199,25 +200,34 @@ def test_warn_for_long_poll_schedule_logs_cron_overlap(caplog: pytest.LogCapture
 def test_validate_symbols_reports_valid_books(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verify symbol validation returns normalized symbols and book status."""
 
-    def fake_fetch_order_book_snapshot(symbol: str, depth: int) -> dict[str, object]:
-        assert symbol == "SOL"
-        assert depth == 1
-        return {
-            "exchange": "deribit",
-            "symbol": "SOL_USDC-PERPETUAL",
-            "timestamp_ms": 1_700_000_000_000,
-            "bids": [(84.0, 2.0)],
-            "asks": [(84.1, 3.0)],
-            "mark_price": 84.05,
-            "index_price": 84.0,
-            "open_interest": 1000.0,
-            "funding_8h": 0.0001,
-            "current_funding": 0.00001,
-        }
+    class Adapter:
+        @property
+        def source_name(self) -> str:
+            return "deribit"
 
-    monkeypatch.setattr(cli, "fetch_order_book_snapshot", fake_fetch_order_book_snapshot)
+        def normalize_symbol(self, symbol: str) -> str:
+            assert symbol == "SOL"
+            return "SOL_USDC-PERPETUAL"
 
-    result = cli._validate_symbol(symbol="SOL", depth=1)
+        def fetch_snapshot(self, symbol: str, depth: int) -> RawSnapshot:
+            assert symbol == "SOL"
+            assert depth == 1
+            return RawSnapshot(
+                exchange="deribit",
+                symbol="SOL_USDC-PERPETUAL",
+                timestamp_ms=1_700_000_000_000,
+                bids=[OrderLevel(price=84.0, amount=2.0)],
+                asks=[OrderLevel(price=84.1, amount=3.0)],
+                mark_price=84.05,
+                index_price=84.0,
+                open_interest=1000.0,
+                funding_8h=0.0001,
+                current_funding=0.00001,
+            )
+
+    monkeypatch.setattr(cli, "source_adapter_for_exchange", lambda exchange: Adapter())
+
+    result = cli._validate_symbol(exchange="deribit", symbol="SOL", depth=1)
 
     assert result["normalized_symbol"] == "SOL_USDC-PERPETUAL"
     assert result["valid_book"] is True
@@ -233,7 +243,7 @@ def test_main_validate_symbols_outputs_json(
     monkeypatch.setattr(
         cli,
         "_validate_symbol",
-        lambda symbol, depth: {
+        lambda exchange, symbol, depth: {
             "symbol": symbol,
             "normalized_symbol": f"{symbol}-PERPETUAL",
             "valid_book": True,

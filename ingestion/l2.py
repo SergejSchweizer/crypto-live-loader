@@ -9,7 +9,9 @@ from datetime import UTC, datetime
 from time import monotonic
 from typing import cast
 
-from ingestion.exchanges.deribit_l2 import fetch_order_book_snapshot
+from domain.contracts import SourceAdapter
+from domain.models import RawSnapshot
+from sources.registry import source_adapter_for_exchange
 
 LOGGER = logging.getLogger(__name__)
 
@@ -25,6 +27,7 @@ class L2FetchConfig:
     poll_interval_s: float
     max_runtime_s: float | None = None
     concurrency: int | None = None
+    adapter: SourceAdapter | None = None
 
 
 @dataclass(frozen=True)
@@ -73,6 +76,7 @@ def fetch_l2_snapshots_for_symbols(
     poll_interval_s: float,
     max_runtime_s: float | None = None,
     concurrency: int | None = None,
+    adapter: SourceAdapter | None = None,
 ) -> dict[str, list[L2Snapshot]]:
     """Collect L2 snapshots for all symbols using async polling ticks."""
 
@@ -84,6 +88,7 @@ def fetch_l2_snapshots_for_symbols(
         poll_interval_s=poll_interval_s,
         max_runtime_s=max_runtime_s,
         concurrency=concurrency,
+        adapter=adapter,
     )
     return asyncio.run(
         fetch_l2_snapshots_for_symbols_async(
@@ -94,6 +99,7 @@ def fetch_l2_snapshots_for_symbols(
             poll_interval_s=config.poll_interval_s,
             max_runtime_s=config.max_runtime_s,
             concurrency=config.concurrency,
+            adapter=config.adapter,
         )
     )
 
@@ -106,6 +112,7 @@ async def fetch_l2_snapshots_for_symbols_async(
     poll_interval_s: float,
     max_runtime_s: float | None = None,
     concurrency: int | None = None,
+    adapter: SourceAdapter | None = None,
 ) -> dict[str, list[L2Snapshot]]:
     """Collect L2 snapshots for all symbols concurrently on each polling tick.
 
@@ -121,6 +128,7 @@ async def fetch_l2_snapshots_for_symbols_async(
         poll_interval_s=poll_interval_s,
         max_runtime_s=max_runtime_s,
         concurrency=concurrency,
+        adapter=adapter,
     )
     _validate_fetch_config(config)
 
@@ -137,6 +145,7 @@ async def fetch_l2_snapshots_for_symbols_async(
             depth=config.depth,
             deadline=deadline,
             semaphore=semaphore,
+            adapter=config.adapter or source_adapter_for_exchange(config.exchange),
         )
         _append_tick_snapshots(snapshots_by_symbol=snapshots_by_symbol, tick_snapshots=tick_snapshots)
 
@@ -188,11 +197,15 @@ async def _collect_l2_tick(
     depth: int,
     deadline: float | None,
     semaphore: asyncio.Semaphore,
+    adapter: SourceAdapter,
 ) -> list[tuple[str, L2Snapshot]]:
     """Fetch one concurrent polling tick for all symbols."""
 
     tick_results = await asyncio.gather(
-        *[_fetch_l2_symbol(symbol=symbol, depth=depth, deadline=deadline, semaphore=semaphore) for symbol in symbols],
+        *[
+            _fetch_l2_symbol(symbol=symbol, depth=depth, deadline=deadline, semaphore=semaphore, adapter=adapter)
+            for symbol in symbols
+        ],
         return_exceptions=True,
     )
     snapshots: list[tuple[str, L2Snapshot]] = []
@@ -211,6 +224,7 @@ async def _fetch_l2_symbol(
     depth: int,
     deadline: float | None,
     semaphore: asyncio.Semaphore,
+    adapter: SourceAdapter,
 ) -> tuple[str, L2Snapshot] | None:
     """Fetch and normalize one symbol snapshot inside a bounded async tick."""
 
@@ -218,7 +232,7 @@ async def _fetch_l2_symbol(
         if _deadline_reached(deadline):
             return None
         started_at = monotonic()
-        raw = await asyncio.to_thread(fetch_order_book_snapshot, symbol=symbol, depth=depth)
+        raw = await asyncio.to_thread(adapter.fetch_snapshot, symbol=symbol, depth=depth)
         return symbol.upper(), _snapshot_from_raw(raw=raw, fetch_duration_s=monotonic() - started_at)
 
 
@@ -246,26 +260,26 @@ async def _sleep_between_ticks(poll_interval_s: float, deadline: float | None) -
     return not _deadline_reached(deadline)
 
 
-def _snapshot_from_raw(raw: dict[str, object], fetch_duration_s: float = 0.0) -> L2Snapshot:
+def _snapshot_from_raw(raw: RawSnapshot, fetch_duration_s: float = 0.0) -> L2Snapshot:
     """Convert normalized adapter payload into ``L2Snapshot``."""
 
-    timestamp_ms = int(cast(int | float, raw["timestamp_ms"]))
+    timestamp_ms = int(raw.timestamp_ms)
     timestamp = datetime.fromtimestamp(timestamp_ms / 1000, tz=UTC)
-    bids = [(float(price), float(amount)) for price, amount in cast(list[tuple[float, float]], raw["bids"])]
-    asks = [(float(price), float(amount)) for price, amount in cast(list[tuple[float, float]], raw["asks"])]
+    bids = [(float(level.price), float(level.amount)) for level in raw.bids]
+    asks = [(float(level.price), float(level.amount)) for level in raw.asks]
 
     return L2Snapshot(
-        exchange=str(raw["exchange"]),
-        symbol=str(raw["symbol"]),
+        exchange=raw.exchange,
+        symbol=raw.symbol,
         timestamp=timestamp,
         fetch_duration_s=fetch_duration_s,
         bids=bids,
         asks=asks,
-        mark_price=_optional_float(raw.get("mark_price")),
-        index_price=_optional_float(raw.get("index_price")),
-        open_interest=_optional_float(raw.get("open_interest")),
-        funding_8h=_optional_float(raw.get("funding_8h")),
-        current_funding=_optional_float(raw.get("current_funding")),
+        mark_price=raw.mark_price,
+        index_price=raw.index_price,
+        open_interest=raw.open_interest,
+        funding_8h=raw.funding_8h,
+        current_funding=raw.current_funding,
     )
 
 
