@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from logging.handlers import TimedRotatingFileHandler
 
-from api.logging_common import unified_formatter
+from api.logging_common import ModuleScopeFilter, unified_formatter
 from ingestion.config import Config, config_int, config_section, configured_logfile_path, load_config
 
 LOGGER_NAME = "crypto_live_loader"
@@ -33,6 +33,7 @@ def configure_logging(module_name: str = "crypto-live-loader", config: Config | 
     logger.setLevel(logging.INFO)
     logger.propagate = False
     formatter = unified_formatter()
+    scope_filter = ModuleScopeFilter()
     resolved_config = config or load_config()
     runtime_config = config_section(resolved_config, "runtime")
     logfile = configured_logfile_path(resolved_config)
@@ -50,12 +51,14 @@ def configure_logging(module_name: str = "crypto-live-loader", config: Config | 
         )
         file_handler.suffix = "%Y-%m-%d"
         file_handler.setFormatter(formatter)
+        file_handler.addFilter(scope_filter)
         logger.addHandler(file_handler)
     except OSError:
         logger.warning("Falling back to stderr logging; cannot create logfile '%s'", logfile)
 
     stream_handler = logging.StreamHandler()
     stream_handler.setFormatter(formatter)
+    stream_handler.addFilter(scope_filter)
     logger.addHandler(stream_handler)
 
     return logger
