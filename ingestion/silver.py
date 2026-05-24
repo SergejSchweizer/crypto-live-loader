@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import math
 from datetime import UTC, datetime
 from pathlib import Path
@@ -10,7 +9,9 @@ from typing import Any, cast
 
 import polars as pl
 
+from ingestion.artifact_io import write_json_artifact
 from ingestion.artifact_state import file_fingerprints, load_json_state, write_json_state
+from ingestion.incremental import changed_input_files, inputs_unchanged
 
 SILVER_L2_FEATURE_DATASET_TYPE = "l2_snapshot_features"
 SILVER_SCHEMA_VERSION = "v1"
@@ -56,22 +57,14 @@ def transform_l2_bronze_to_silver(
     state = load_json_state(state_path)
     previous_fingerprints = state.get("bronze_inputs", {})
     transform_settings_unchanged = state.get("depth") == depth
-    if transform_settings_unchanged and previous_fingerprints == current_fingerprints:
+    if transform_settings_unchanged and inputs_unchanged(previous_fingerprints, current_fingerprints):
         return []
-
-    changed_files = []
-    deleted_inputs = (
-        set(previous_fingerprints) - set(current_fingerprints) if isinstance(previous_fingerprints, dict) else set()
+    changed_files = changed_input_files(
+        files=bronze_files,
+        previous_fingerprints=previous_fingerprints,
+        current_fingerprints=current_fingerprints,
+        include_all=not transform_settings_unchanged,
     )
-    for path in bronze_files:
-        resolved_path = str(path.resolve())
-        if (
-            not transform_settings_unchanged
-            or deleted_inputs
-            or not isinstance(previous_fingerprints, dict)
-            or previous_fingerprints.get(resolved_path) != current_fingerprints[resolved_path]
-        ):
-            changed_files.append(path)
     bronze = pl.read_parquet([str(path) for path in changed_files])
     silver = silver_l2_features_from_bronze(bronze=bronze, depth=depth)
     written_files = save_silver_l2_snapshot_features(
@@ -241,10 +234,7 @@ def save_silver_l2_snapshot_features(
 
         written_files.append(str(file_path.resolve()))
         if manifest:
-            metadata_path.write_text(
-                json.dumps(silver_artifact_metadata(output), indent=2, sort_keys=True),
-                encoding="utf-8",
-            )
+            write_json_artifact(metadata_path, silver_artifact_metadata(output))
             written_files.append(str(metadata_path.resolve()))
         if plot:
             write_silver_profile_png(silver=output, path=plot_path)

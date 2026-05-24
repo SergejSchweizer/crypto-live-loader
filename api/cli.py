@@ -3,15 +3,22 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 import logging
+from collections.abc import Mapping
 from dataclasses import asdict
+from datetime import UTC, datetime
 from time import perf_counter
 from typing import cast
 
 from api.constants import (
     BRONZE_BUILDER_COMMAND,
     GOLD_BUILDER_COMMAND,
+    LEGACY_BRONZE_BUILDER_COMMAND,
+    OPTIONS_BRONZE_BUILDER_COMMAND,
+    OPTIONS_GOLD_BUILDER_COMMAND,
+    OPTIONS_SILVER_BUILDER_COMMAND,
     SILVER_BUILDER_COMMAND,
     VALIDATE_SYMBOLS_COMMAND,
 )
@@ -33,12 +40,29 @@ from ingestion.config import (
 from ingestion.gold import transform_l2_silver_to_gold
 from ingestion.l2 import L2Snapshot, fetch_l2_snapshots_for_symbols
 from ingestion.lake import save_l2_snapshot_parquet_lake
+from ingestion.options import (
+    OPTION_TICKER_DATASET_TYPE,
+    OPTION_TICKER_SCHEMA_VERSION,
+    OPTION_TICKER_SOURCE,
+    OptionTickerSnapshotRow,
+    normalize_option_ticker_rows,
+    snapshot_time_floor_minute,
+    utc_run_id,
+)
+from ingestion.options_gold import transform_option_silver_to_gold
+from ingestion.options_lake import save_option_ticker_snapshot_parquet_lake
+from ingestion.options_silver import transform_option_bronze_to_silver
 from ingestion.silver import transform_l2_bronze_to_silver
+from sources.deribit_options import (
+    fetch_option_book_summary_rows,
+    resolve_options_currency_request,
+)
 from sources.registry import source_adapter_for_exchange
 
 __all__ = ["build_parser", "main"]
 
 SnapshotsBySymbol = dict[str, list[L2Snapshot]]
+OptionRowsByCurrency = dict[str, list[OptionTickerSnapshotRow]]
 
 
 def _boolean_optional_flag(
@@ -56,7 +80,7 @@ def _boolean_optional_flag(
 
 
 def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
-    """Create the bronze-builder CLI parser."""
+    """Create the CLI parser."""
 
     config = config or load_config()
     ingestion_config = config_section(config, "ingestion")
@@ -65,6 +89,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
 
     l2_parser = subparsers.add_parser(
         BRONZE_BUILDER_COMMAND,
+        aliases=[LEGACY_BRONZE_BUILDER_COMMAND],
         help="Fetch Deribit L2 snapshots and persist raw rows to the bronze parquet lake",
     )
     l2_parser.add_argument(
@@ -119,6 +144,115 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=config_bool(ingestion_config, "json_output", True),
         help="Print JSON output",
+    )
+
+    options_config = config_section(ingestion_config, "options")
+    options_parser = subparsers.add_parser(
+        OPTIONS_BRONZE_BUILDER_COMMAND,
+        help="Fetch Deribit option ticker snapshots and persist raw rows to the bronze parquet lake",
+    )
+    options_parser.add_argument(
+        "--exchange",
+        choices=["deribit"],
+        default="deribit",
+    )
+    options_parser.add_argument(
+        "--currencies",
+        nargs="+",
+        default=config_str_list(options_config, "currencies", ["BTC", "ETH", "SOL"]),
+        type=str,
+        help="Option currencies to fetch, separated by spaces or commas",
+    )
+    options_parser.add_argument(
+        "--lake-root",
+        default=config_str(options_config, "lake_root", "lake/bronze"),
+        help="Root directory for parquet lake files",
+    )
+    options_parser.add_argument(
+        "--save-parquet-lake",
+        action=argparse.BooleanOptionalAction,
+        default=config_bool(options_config, "save_parquet_lake", True),
+        help="Save raw option ticker snapshots to bronze parquet lake partitions",
+    )
+    options_parser.add_argument(
+        "--schema-version",
+        default=config_str(options_config, "schema_version", OPTION_TICKER_SCHEMA_VERSION),
+        help="Schema version tag to annotate each normalized row",
+    )
+    options_parser.add_argument(
+        "--source",
+        default=config_str(options_config, "source", OPTION_TICKER_SOURCE),
+        help="Source identifier written to bronze rows",
+    )
+    options_parser.add_argument(
+        "--json-output",
+        action=argparse.BooleanOptionalAction,
+        default=config_bool(options_config, "json_output", config_bool(ingestion_config, "json_output", True)),
+        help="Print JSON output",
+    )
+    options_silver_parser = subparsers.add_parser(
+        OPTIONS_SILVER_BUILDER_COMMAND,
+        help="Transform bronze option snapshots into monthly silver option chain features",
+    )
+    options_silver_parser.add_argument(
+        "--bronze-lake-root",
+        default=config_str(options_config, "lake_root", "lake/bronze"),
+        help="Root directory for bronze parquet input files",
+    )
+    options_silver_parser.add_argument(
+        "--silver-lake-root",
+        default=config_str(ingestion_config, "silver_lake_root", "lake/silver"),
+        help="Root directory for silver output artifact files",
+    )
+    _boolean_optional_flag(
+        options_silver_parser,
+        "plot",
+        True,
+        "Enable or suppress Silver PNG profile generation",
+    )
+    _boolean_optional_flag(
+        options_silver_parser,
+        "manifest",
+        True,
+        "Enable or suppress Silver JSON metadata manifest generation",
+    )
+    _boolean_optional_flag(
+        options_silver_parser,
+        "json-output",
+        config_bool(options_config, "json_output", config_bool(ingestion_config, "json_output", True)),
+        "Print JSON output",
+    )
+    options_gold_parser = subparsers.add_parser(
+        OPTIONS_GOLD_BUILDER_COMMAND,
+        help="Transform options Silver features into Gold option surface artifacts",
+    )
+    options_gold_parser.add_argument(
+        "--silver-lake-root",
+        default=config_str(ingestion_config, "silver_lake_root", "lake/silver"),
+        help="Root directory for options Silver parquet input files",
+    )
+    options_gold_parser.add_argument(
+        "--gold-lake-root",
+        default=config_str(ingestion_config, "gold_lake_root", "lake/gold"),
+        help="Root directory for options Gold artifact output files",
+    )
+    _boolean_optional_flag(
+        options_gold_parser,
+        "plot",
+        True,
+        "Enable or suppress Gold PNG profile generation",
+    )
+    _boolean_optional_flag(
+        options_gold_parser,
+        "manifest",
+        True,
+        "Enable or suppress Gold JSON metadata manifest generation",
+    )
+    _boolean_optional_flag(
+        options_gold_parser,
+        "json-output",
+        config_bool(options_config, "json_output", config_bool(ingestion_config, "json_output", True)),
+        "Print JSON output",
     )
 
     silver_parser = subparsers.add_parser(
@@ -269,6 +403,49 @@ def _normalize_cli_symbols(values: list[str]) -> list[str]:
     if not symbols:
         raise ValueError("at least one symbol is required")
     return symbols
+
+
+def _normalize_cli_currencies(values: list[str]) -> list[str]:
+    """Normalize CLI currency values from space- or comma-delimited inputs."""
+
+    currencies: list[str] = []
+    for value in values:
+        currencies.extend(item.strip().upper() for item in value.replace(",", " ").split() if item.strip())
+    if not currencies:
+        raise ValueError("at least one currency is required")
+    return currencies
+
+
+def _emit_json_output(enabled: bool, payload: Mapping[str, object]) -> None:
+    """Print one JSON payload when output is enabled."""
+
+    if enabled:
+        print(json.dumps(payload, indent=2))
+
+
+async def _fetch_options_rows_for_currencies(
+    currencies: list[str],
+    concurrency: int,
+) -> tuple[dict[str, list[dict[str, object]]], dict[str, str], dict[str, str]]:
+    """Fetch option summary rows concurrently for all requested currencies."""
+
+    semaphore = asyncio.Semaphore(max(1, concurrency))
+    rows_by_currency: dict[str, list[dict[str, object]]] = {}
+    source_currency_by_requested: dict[str, str] = {}
+    errors: dict[str, str] = {}
+
+    async def _fetch_one(currency: str) -> None:
+        request = resolve_options_currency_request(currency)
+        source_currency_by_requested[request.requested_currency] = request.source_currency
+        try:
+            async with semaphore:
+                rows = await asyncio.to_thread(fetch_option_book_summary_rows, request)
+            rows_by_currency[request.requested_currency] = rows
+        except Exception as exc:  # noqa: BLE001
+            errors[request.requested_currency] = str(exc)
+
+    await asyncio.gather(*[_fetch_one(currency) for currency in currencies])
+    return rows_by_currency, source_currency_by_requested, errors
 
 
 def _log_bronze_builder_summary(
@@ -449,8 +626,7 @@ def _run_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config
         logger=logger,
     )
 
-    if bool(args.json_output):
-        print(json.dumps(output, indent=2))
+    _emit_json_output(bool(args.json_output), output)
     _log_bronze_builder_summary(
         logger=logger,
         exchange=exchange,
@@ -460,6 +636,120 @@ def _run_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config
         parquet_files=parquet_files,
         elapsed_s=perf_counter() - started_at,
         parquet_error=parquet_error,
+    )
+
+
+def _run_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    """Run Deribit options chain snapshot collection and optional bronze persistence."""
+
+    started_at = perf_counter()
+    currencies = _normalize_cli_currencies(cast(list[str], args.currencies))
+    run_id = utc_run_id()
+    snapshot_time = snapshot_time_floor_minute()
+    ingested_at = datetime.now(UTC)
+    ingestion_config = config_section(config, "ingestion")
+    options_config = config_section(ingestion_config, "options")
+    fetch_conc = max(1, config_int(options_config, "fetch_concurrency", 3))
+
+    raw_rows_by_currency, source_currency_by_requested, fetch_errors = asyncio.run(
+        _fetch_options_rows_for_currencies(currencies=currencies, concurrency=fetch_conc)
+    )
+
+    rows_by_currency: OptionRowsByCurrency = {}
+    normalization_errors: list[str] = []
+    for currency in currencies:
+        source_currency = source_currency_by_requested.get(currency, "")
+        raw_rows = raw_rows_by_currency.get(currency, [])
+        rows, row_errors = normalize_option_ticker_rows(
+            raw_rows,
+            requested_currency=currency,
+            source_currency=source_currency,
+            run_id=run_id,
+            snapshot_time=snapshot_time,
+            ingested_at=ingested_at,
+            source=cast(str, args.source),
+            schema_version=cast(str, args.schema_version),
+        )
+        rows_by_currency[currency] = rows
+        normalization_errors.extend(row_errors)
+
+    output_files: list[str] = []
+    if bool(args.save_parquet_lake):
+        output_files = save_option_ticker_snapshot_parquet_lake(
+            rows_by_currency=rows_by_currency,
+            lake_root=cast(str, args.lake_root),
+        )
+
+    currency_results: dict[str, dict[str, object]] = {}
+    for currency in currencies:
+        if currency in fetch_errors:
+            currency_results[currency] = {
+                "rows": 0,
+                "status": "error",
+                "error": fetch_errors[currency],
+            }
+            continue
+        currency_results[currency] = {
+            "rows": len(rows_by_currency.get(currency, [])),
+            "status": "ok",
+            "source_currency": source_currency_by_requested.get(currency, ""),
+        }
+
+    output = {
+        "command": OPTIONS_BRONZE_BUILDER_COMMAND,
+        "exchange": cast(str, args.exchange),
+        "dataset_type": OPTION_TICKER_DATASET_TYPE,
+        "run_id": run_id,
+        "snapshot_time": snapshot_time.isoformat().replace("+00:00", "Z"),
+        "requested_currencies": currencies,
+        "rows_written": sum(len(rows) for rows in rows_by_currency.values()),
+        "currency_results": currency_results,
+        "output_files": output_files,
+        "errors": list(fetch_errors.values()) + normalization_errors,
+    }
+    _emit_json_output(bool(args.json_output), output)
+    errors = cast(list[str], output["errors"])
+    logger.info(
+        "options-bronze-builder run summary run_id=%s snapshot_time=%s currencies=%s rows_written=%s files=%s "
+        "errors=%s elapsed_s=%.3f",
+        run_id,
+        output["snapshot_time"],
+        ",".join(currencies),
+        output["rows_written"],
+        len(output_files),
+        len(errors),
+        perf_counter() - started_at,
+    )
+
+
+def _run_options_silver_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """Run Bronze-to-Silver option chain transformation."""
+
+    started_at = perf_counter()
+    bronze_lake_root = cast(str, args.bronze_lake_root)
+    silver_lake_root = cast(str, args.silver_lake_root)
+    written_files = transform_option_bronze_to_silver(
+        bronze_lake_root=bronze_lake_root,
+        silver_lake_root=silver_lake_root,
+        plot=bool(args.plot),
+        manifest=bool(args.manifest),
+    )
+    elapsed_s = perf_counter() - started_at
+    output = {
+        "command": OPTIONS_SILVER_BUILDER_COMMAND,
+        "status": "complete",
+        "bronze_lake_root": bronze_lake_root,
+        "silver_lake_root": silver_lake_root,
+        "artifact_files": written_files,
+    }
+    _emit_json_output(bool(args.json_output), output)
+    logger.info(
+        "options-silver-builder run summary status=complete elapsed_s=%.3f bronze_lake_root=%s "
+        "silver_lake_root=%s artifact_files=%s",
+        elapsed_s,
+        bronze_lake_root,
+        silver_lake_root,
+        len(written_files),
     )
 
 
@@ -486,8 +776,7 @@ def _run_silver_builder(args: argparse.Namespace, logger: logging.Logger) -> Non
         "depth": depth,
         "artifact_files": written_files,
     }
-    if bool(args.json_output):
-        print(json.dumps(output, indent=2))
+    _emit_json_output(bool(args.json_output), output)
     logger.info(
         "silver-builder run summary status=complete elapsed_s=%.3f bronze_lake_root=%s "
         "silver_lake_root=%s depth=%s artifact_files=%s",
@@ -495,6 +784,37 @@ def _run_silver_builder(args: argparse.Namespace, logger: logging.Logger) -> Non
         bronze_lake_root,
         silver_lake_root,
         depth,
+        len(written_files),
+    )
+
+
+def _run_options_gold_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """Run Silver-to-Gold options surface transformation."""
+
+    started_at = perf_counter()
+    silver_lake_root = cast(str, args.silver_lake_root)
+    gold_lake_root = cast(str, args.gold_lake_root)
+    written_files = transform_option_silver_to_gold(
+        silver_lake_root=silver_lake_root,
+        gold_lake_root=gold_lake_root,
+        plot=bool(args.plot),
+        manifest=bool(args.manifest),
+    )
+    elapsed_s = perf_counter() - started_at
+    output = {
+        "command": OPTIONS_GOLD_BUILDER_COMMAND,
+        "status": "complete",
+        "silver_lake_root": silver_lake_root,
+        "gold_lake_root": gold_lake_root,
+        "artifact_files": written_files,
+    }
+    _emit_json_output(bool(args.json_output), output)
+    logger.info(
+        "options-gold-builder run summary status=complete elapsed_s=%.3f silver_lake_root=%s "
+        "gold_lake_root=%s artifact_files=%s",
+        elapsed_s,
+        silver_lake_root,
+        gold_lake_root,
         len(written_files),
     )
 
@@ -529,8 +849,7 @@ def _run_gold_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
         "fill_policy": cast(str, args.fill_policy),
         "artifact_files": written_files,
     }
-    if bool(args.json_output):
-        print(json.dumps(output, indent=2))
+    _emit_json_output(bool(args.json_output), output)
     logger.info(
         "gold-builder run summary status=complete elapsed_s=%.3f silver_lake_root=%s "
         "gold_lake_root=%s expected_snapshots_per_minute=%s completeness_threshold=%.3f "
@@ -598,8 +917,7 @@ def _run_validate_symbols(args: argparse.Namespace, logger: logging.Logger) -> N
         "symbols": results,
         "all_valid": all(bool(item["valid_book"]) for item in results),
     }
-    if bool(args.json_output):
-        print(json.dumps(output, indent=2))
+    _emit_json_output(bool(args.json_output), output)
     logger.info(
         "Symbol validation complete exchange=%s symbols=%s all_valid=%s",
         args.exchange,
@@ -617,6 +935,12 @@ def main() -> None:
     logger = configure_logging(module_name=str(args.command), config=config)
     if args.command == BRONZE_BUILDER_COMMAND:
         _run_bronze_builder(args=args, logger=logger, config=config)
+    elif args.command == OPTIONS_BRONZE_BUILDER_COMMAND:
+        _run_options_bronze_builder(args=args, logger=logger, config=config)
+    elif args.command == OPTIONS_SILVER_BUILDER_COMMAND:
+        _run_options_silver_builder(args=args, logger=logger)
+    elif args.command == OPTIONS_GOLD_BUILDER_COMMAND:
+        _run_options_gold_builder(args=args, logger=logger)
     elif args.command == SILVER_BUILDER_COMMAND:
         _run_silver_builder(args=args, logger=logger)
     elif args.command == GOLD_BUILDER_COMMAND:

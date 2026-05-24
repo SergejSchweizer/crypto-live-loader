@@ -10,7 +10,8 @@ Current scope is intentionally narrow:
 - Fetch Deribit perpetual L2 order book snapshots through the public REST API.
 - Poll multiple symbols concurrently with bounded runtime controls.
 - Optionally persist raw snapshots to idempotent daily bronze Parquet partitions.
-- Expose ingestion and transform CLI commands: `bronze-builder`, `silver-builder`, and `gold-builder`.
+- Expose ingestion and transform CLI commands: `l2-bronze-builder`, `options-bronze-builder`, `silver-builder`,
+  `options-silver-builder`, `gold-builder`, and `options-gold-builder`.
 - Validate symbol aliases before scheduled jobs with `validate-symbols`.
 
 Former OHLCV, standalone open-interest, standalone funding, research-report, and database-ingestion surfaces have been removed.
@@ -122,22 +123,35 @@ Supported config keys:
 | `ingestion.silver_lake_root` | Silver artifact lake root directory. Defaults to `lake/silver`. |
 | `ingestion.gold_lake_root` | Gold artifact root directory. Defaults to `lake/gold`. |
 | `ingestion.json_output` | Print CLI JSON output when true. |
+| `ingestion.options.currencies` | Option currencies for options Bronze runs. Defaults to `["BTC", "ETH", "SOL"]`. |
+| `ingestion.options.fetch_concurrency` | Max concurrent options-currency fetches per run. Defaults to `3`. |
+| `ingestion.options.save_parquet_lake` | Save raw options snapshots to bronze Parquet when true. |
+| `ingestion.options.lake_root` | Bronze root for options snapshots. Defaults to `lake/bronze`. |
+| `ingestion.options.source` | Source marker written to options bronze rows. Defaults to `rest_get_book_summary_by_currency`. |
+| `ingestion.options.schema_version` | Options bronze schema version label. Defaults to `v1`. |
+| `ingestion.options.json_output` | Print options builder JSON output when true. |
 
 ## Current Jobs
 
 The production cron setup runs the three data-layer builders once per minute from the repository root:
 
 ```cron
-* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py bronze-builder --symbols BTC ETH SOL
+* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py l2-bronze-builder --symbols BTC ETH SOL
+* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-bronze-builder --currencies BTC ETH SOL --save-parquet-lake
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py silver-builder
+* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-silver-builder
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py gold-builder
+* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-gold-builder
 ```
 
 | Job | Purpose | Reads | Writes | Log File |
 |---|---|---|---|---|
-| `bronze-builder` | Poll Deribit REST L2 snapshots for BTC, ETH, and SOL. | Deribit public order book API. | Daily Bronze Parquet partitions under `lake/bronze/`. | `.logs/bronze-builder.log` |
+| `l2-bronze-builder` | Poll Deribit REST L2 snapshots for BTC, ETH, and SOL. | Deribit public order book API. | Daily Bronze Parquet partitions under `lake/bronze/`. | `.logs/l2-bronze-builder.log` (legacy alias: `.logs/bronze-builder.log`) |
+| `options-bronze-builder` | Fetch Deribit options chain ticker snapshots for BTC/ETH/SOL and write raw Bronze rows. | Deribit `public/get_book_summary_by_currency` (SOL via `USDC` filtered to `SOL_USDC-`). | Daily Bronze Parquet partitions under `lake/bronze/dataset_type=option_ticker_snapshot_1m/`. | `.logs/options-bronze-builder.log` |
 | `silver-builder` | Transform changed Bronze snapshots into fixed-width Silver snapshot feature rows. | `lake/bronze/` | Monthly Silver Parquet, JSON metadata, PNG profile artifacts, and `_silver_transform_state.json` under `lake/silver/`. | `.logs/silver-builder.log` |
+| `options-silver-builder` | Transform changed Bronze options snapshots into Silver option-chain feature rows. | `lake/bronze/dataset_type=option_ticker_snapshot_1m/` | Monthly Silver Parquet, JSON metadata, PNG profile artifacts, and `_silver_options_transform_state.json` under `lake/silver/`. | `.logs/options-silver-builder.log` |
 | `gold-builder` | Aggregate changed Silver symbol partitions into dense M1 Gold datasets. | `lake/silver/` | Versioned timeframe Parquet, JSON metadata, PNG profile artifacts, and `_gold_transform_state.json` under `lake/gold/`. | `.logs/gold-builder.log` |
+| `options-gold-builder` | Aggregate options Silver rows into minute-level Gold option surface features. | `lake/silver/dataset_type=option_chain_features_1m/` | Monthly Gold Parquet, JSON metadata, PNG profile artifacts, and `_gold_options_transform_state.json` under `lake/gold/`. | `.logs/options-gold-builder.log` |
 
 Jobs do not use process-level serialization, so overlapping scheduled launches are allowed. Logs rotate weekly, and rotated logs are kept indefinitely by default.
 
@@ -146,7 +160,7 @@ Jobs do not use process-level serialization, so overlapping scheduled launches a
 ### Bronze Builder
 
 ```text
-python main.py bronze-builder [options]
+python main.py l2-bronze-builder [options]
 ```
 
 | Option | Meaning |
@@ -167,19 +181,19 @@ Symbols are normalized to Deribit perpetual instruments. For example, `BTC`, `BT
 Fetch BTC, ETH, and SOL snapshots at the default cadence of five polling ticks per run and print JSON:
 
 ```bash
-python main.py bronze-builder --symbols BTC ETH SOL
+python main.py l2-bronze-builder --symbols BTC ETH SOL
 ```
 
 Comma-separated symbols are also accepted:
 
 ```bash
-python main.py bronze-builder --symbols BTC,ETH,SOL
+python main.py l2-bronze-builder --symbols BTC,ETH,SOL
 ```
 
 Save raw snapshots to the bronze Parquet lake:
 
 ```bash
-python main.py bronze-builder \
+python main.py l2-bronze-builder \
   --symbols BTC ETH SOL \
   --levels 50 \
   --save-parquet-lake
@@ -187,7 +201,7 @@ python main.py bronze-builder \
 
 With the defaults, each run collects five raw snapshots per symbol with a 50-second runtime budget. Bronze persistence appends those snapshots as distinct parquet rows in the symbol's daily partition; it does not aggregate them.
 
-Runtime logs are written under `.logs/` by default, for example `.logs/bronze-builder.log`. The directory is ignored by git. Logs rotate weekly and `runtime.log_backup_count: 0` keeps older rotated logs.
+Runtime logs are written under `.logs/` by default, for example `.logs/l2-bronze-builder.log` when using the new command name. The legacy alias `bronze-builder` is still accepted and writes `.logs/bronze-builder.log`. The directory is ignored by git. Logs rotate weekly and `runtime.log_backup_count: 0` keeps older rotated logs.
 
 ### Silver Builder
 
@@ -219,6 +233,50 @@ Each Silver month partition writes three artifacts. The parquet file is named by
 YYYY-MM.parquet
 YYYY-MM.json
 YYYY-MM.png
+```
+
+### Options Bronze Builder
+
+```text
+python main.py options-bronze-builder [options]
+```
+
+| Option | Meaning |
+|---|---|
+| `--exchange {deribit}` | Exchange adapter to use. Currently `deribit` only. |
+| `--currencies CURRENCIES [CURRENCIES ...]` | Option currencies to fetch. Supports space/comma-separated values. |
+| `--lake-root LAKE_ROOT` | Root directory for optional options Bronze Parquet output. |
+| `--save-parquet-lake`, `--no-save-parquet-lake` | Enable or disable options bronze Parquet persistence. |
+| `--schema-version SCHEMA_VERSION` | Schema version marker written to rows. |
+| `--source SOURCE` | Source marker written to rows. |
+| `--json-output`, `--no-json-output` | Enable or suppress JSON output. Logs are still emitted. |
+
+`SOL` is fetched via Deribit `currency=USDC` and filtered to `instrument_name` values prefixed with `SOL_USDC-`.
+
+Example:
+
+```bash
+python main.py options-bronze-builder --currencies BTC ETH SOL --save-parquet-lake
+```
+
+### Options Silver Builder
+
+```text
+python main.py options-silver-builder [options]
+```
+
+| Option | Meaning |
+|---|---|
+| `--bronze-lake-root BRONZE_LAKE_ROOT` | Root directory for options bronze Parquet input files. |
+| `--silver-lake-root SILVER_LAKE_ROOT` | Root directory for options Silver output files. |
+| `--plot`, `--no-plot` | Enable or suppress options Silver PNG profile generation. |
+| `--manifest`, `--no-manifest` | Enable or suppress options Silver JSON metadata generation. |
+| `--json-output`, `--no-json-output` | Enable or suppress JSON output. Logs are still emitted. |
+
+Example:
+
+```bash
+python main.py options-silver-builder
 ```
 
 ### Gold Builder
@@ -292,6 +350,26 @@ Use this profile view as a fast QA pass:
 
 The Gold job logs to `.logs/gold-builder.log` by default and allows overlapping transform launches.
 
+### Options Gold Builder
+
+```text
+python main.py options-gold-builder [options]
+```
+
+| Option | Meaning |
+|---|---|
+| `--silver-lake-root SILVER_LAKE_ROOT` | Root directory for options Silver Parquet input files. |
+| `--gold-lake-root GOLD_LAKE_ROOT` | Root directory for options Gold artifact output files. |
+| `--plot`, `--no-plot` | Enable or suppress options Gold PNG profile generation. |
+| `--manifest`, `--no-manifest` | Enable or suppress options Gold JSON metadata generation. |
+| `--json-output`, `--no-json-output` | Enable or suppress JSON output. Logs are still emitted. |
+
+Example:
+
+```bash
+python main.py options-gold-builder
+```
+
 Validate symbols before adding them to cron:
 
 ```bash
@@ -364,8 +442,112 @@ lake/gold/
 | `ingestion/exchanges/deribit_l2.py` | Deribit order book adapter and symbol normalization. |
 | `ingestion/l2.py` | L2 dataclasses, async polling, and snapshot normalization. |
 | `ingestion/lake.py` | Idempotent Parquet writer for raw L2 snapshots. |
+| `sources/deribit_options.py` | Deribit options chain summary fetcher and currency mapping rules. |
+| `ingestion/options.py` | Options bronze normalization and lightweight row validation. |
+| `ingestion/options_lake.py` | Partitioned bronze Parquet writer for options snapshot rows. |
+| `ingestion/options_silver.py` | Polars options Bronze-to-Silver transform and monthly artifact writer. |
+| `ingestion/options_gold.py` | Polars options Silver-to-Gold option-surface transform and monthly artifact writer. |
 | `ingestion/silver.py` | Polars Bronze-to-Silver transform and monthly Silver artifact writer. |
 | `ingestion/gold.py` | Polars Silver-to-Gold dense M1 aggregation, versioned timeframe artifact writing, metadata, and PNG profiles. |
+
+## Bronze Datasets
+
+Bronze is fetch-plus-persist only. No feature engineering, interpolation, surface fitting, or Greek computation is done at this layer.
+
+### Bronze Dataset: `l2_snapshot`
+
+Source: Deribit `public/get_order_book` (REST polling)
+
+Partition layout:
+
+```text
+lake/bronze/
+  dataset_type=l2_snapshot/
+    exchange=deribit/
+      instrument_type=perp/
+        symbol=<instrument>/
+          depth=<requested_depth>/
+            source=rest_order_book/
+              month=YYYY-MM/
+                date=YYYY-MM-DD/
+                  data.parquet
+```
+
+| Column | Meaning | Why it is important |
+|---|---|---|
+| `schema_version` | Bronze row schema version (currently `v1`). | Keeps schema evolution explicit and reproducible across runs. |
+| `dataset_type` | Dataset identifier (`l2_snapshot`). | Distinguishes this raw order-book feed from other Bronze datasets. |
+| `exchange` | Venue identifier (`deribit`). | Preserves source lineage for multi-exchange compatibility later. |
+| `instrument_type` | Instrument class (`perp`). | Keeps contract family explicit for downstream grouping and model scope. |
+| `symbol` | Canonical Deribit instrument name (for example `BTC-PERPETUAL`). | Primary identity key for per-instrument time series and partitions. |
+| `event_time` | Exchange event timestamp for this snapshot. | Core market-time axis for Silver/Gold aggregation and backtesting order. |
+| `ingested_at` | UTC time this pipeline wrote the row. | Enables latency and ingestion-quality diagnostics. |
+| `run_id` | Unique ingestion-run identifier. | Traceability for debugging run-level issues and replay. |
+| `source` | Source channel marker (`rest_order_book`). | Distinguishes collection channel if additional collectors are added later. |
+| `depth` | Requested book depth per side. | Defines expected array widths and feature comparability in Silver. |
+| `bids` | Raw bid ladder as ordered `(price, amount)` levels. | Preserves full microstructure needed for depth/imbalance features. |
+| `asks` | Raw ask ladder as ordered `(price, amount)` levels. | Same as bids; required for spread, microprice, and pressure metrics. |
+| `mark_price` | Deribit mark price at snapshot time. | Stable reference price used by downstream quality and carry analysis. |
+| `index_price` | Deribit index price at snapshot time. | Spot-style anchor for basis/funding context. |
+| `open_interest` | Deribit open interest value in payload. | Positioning/liquidity context for market regime diagnostics. |
+| `funding_8h` | 8-hour funding metric from Deribit payload. | Carry signal component for perp market behavior. |
+| `current_funding` | Current funding rate from Deribit payload. | Short-horizon carry and pressure context in Silver/Gold features. |
+
+### Bronze Dataset: `option_ticker_snapshot_1m`
+
+Source: Deribit `public/get_book_summary_by_currency` with `kind=option`
+
+Currency mapping:
+- `BTC` -> `currency=BTC`
+- `ETH` -> `currency=ETH`
+- `SOL` -> `currency=USDC` and keep only `instrument_name` prefixed by `SOL_USDC-`
+
+Partition layout:
+
+```text
+lake/bronze/
+  dataset_type=option_ticker_snapshot_1m/
+    exchange=deribit/
+      instrument_type=option/
+        currency=<BTC|ETH|SOL>/
+          source=rest_get_book_summary_by_currency/
+            date=YYYY-MM-DD/
+              part-<run_id>.parquet
+```
+
+| Column | Meaning | Why it is important |
+|---|---|---|
+| `schema_version` | Bronze row schema version (currently `v1`). | Keeps options schema changes controlled and auditable. |
+| `dataset_type` | Dataset identifier (`option_ticker_snapshot_1m`). | Prevents mixing chain snapshots with perp L2 snapshots. |
+| `exchange` | Venue identifier (`deribit`). | Source lineage and multi-venue compatibility. |
+| `source` | Source channel marker (`rest_get_book_summary_by_currency`). | Reproducibility of fetch path and endpoint provenance. |
+| `currency` | Logical analysis currency (`BTC`, `ETH`, `SOL`). | Stable partition key for downstream option-surface research. |
+| `requested_currency` | Currency requested by CLI/config. | Verifies user intent and supports run-level diagnostics. |
+| `source_currency` | Currency sent to Deribit endpoint (`BTC`, `ETH`, or `USDC` for SOL). | Critical for SOL mapping traceability and auditability. |
+| `instrument_name` | Deribit option instrument id (for example `BTC-30JUN26-120000-C`). | Contract identity used to parse expiry/strike/type in Silver. |
+| `base_currency` | Base currency returned by Deribit row. | Extra contract context and integrity check against expected currency. |
+| `quote_currency` | Quote currency returned by Deribit row. | Pricing denomination context and contract validation support. |
+| `instrument_type` | Instrument class (`option`). | Keeps downstream transforms scoped to option contracts only. |
+| `snapshot_time` | Pipeline-observed snapshot timestamp (minute-aligned). | Primary backtest/feature time axis for chain-state observations. |
+| `exchange_creation_time` | Deribit row `creation_timestamp` converted to datetime. | Exchange-side freshness/lag checks against pipeline observation time. |
+| `ingested_at` | UTC time row was persisted. | End-to-end ingestion timing and operational observability. |
+| `run_id` | Unique ingestion-run identifier. | Run traceability and partial-failure diagnosis. |
+| `bid_price` | Best bid price from summary row. | Liquidity and tradability signal; spread computation input. |
+| `ask_price` | Best ask price from summary row. | Liquidity and tradability signal; spread computation input. |
+| `mid_price` | Mid quote from summary row if provided. | Fair-value proxy for pricing and sanity checks. |
+| `mark_price` | Deribit mark price for contract. | Main non-noisy option price anchor used in analytics. |
+| `mark_iv` | Implied volatility of mark price (option-specific). | Core volatility-surface signal for Silver/Gold features. |
+| `underlying_price` | Underlying reference price in row. | Required for moneyness/log-moneyness and surface alignment. |
+| `underlying_index` | Deribit underlying index label. | Reference-series provenance and cross-checking. |
+| `interest_rate` | Option-specific interest-rate field from Deribit. | Needed later for model-based IV/Greek workflows. |
+| `open_interest` | Contract open interest from summary row. | Liquidity/participation proxy and surface quality context. |
+| `volume` | Contract traded volume in native units. | Activity and liquidity context for filtering and weighting. |
+| `volume_usd` | Contract traded volume in USD terms. | Cross-currency comparable activity metric. |
+| `high` | Session high price from summary row. | Intraday range context and sanity checks. |
+| `low` | Session low price from summary row. | Intraday range context and sanity checks. |
+| `last` | Last traded price from summary row. | Observed traded price anchor when quotes are sparse. |
+| `price_change` | Session price change metric from summary row. | Regime/momentum context for exploratory analysis. |
+| `raw_payload_hash` | Deterministic hash of raw row payload. | Row-level reproducibility and tamper/change detection. |
 
 ## Data Dictionary
 

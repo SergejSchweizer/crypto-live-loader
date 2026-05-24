@@ -32,6 +32,16 @@ DEFAULT_CONFIG: Config = {
         "silver_lake_root": "lake/silver",
         "gold_lake_root": "lake/gold",
         "json_output": False,
+        "options": {
+            "enabled": True,
+            "currencies": ["BTC", "ETH", "SOL"],
+            "fetch_concurrency": 3,
+            "save_parquet_lake": True,
+            "lake_root": "lake/bronze",
+            "source": "rest_get_book_summary_by_currency",
+            "schema_version": "v1",
+            "json_output": False,
+        },
     },
 }
 
