@@ -9,7 +9,7 @@ from pathlib import Path
 import polars as pl
 
 from ingestion.options import OptionTickerSnapshotRow
-from ingestion.options_lake import save_option_ticker_snapshot_parquet_lake
+from ingestion.options_lake import save_options_ticker_snapshot_parquet_lake
 from ingestion.options_silver import (
     option_chain_features_from_bronze,
     option_silver_partition_path,
@@ -25,7 +25,7 @@ def _sample_option_row(
 ) -> OptionTickerSnapshotRow:
     return OptionTickerSnapshotRow(
         exchange="deribit",
-        dataset_type="option_ticker_snapshot_1m",
+        dataset_type="options_ticker_snapshot_1m",
         source="rest_get_book_summary_by_currency",
         currency="BTC",
         requested_currency="BTC",
@@ -69,7 +69,7 @@ def test_option_silver_partition_path_uses_monthly_layout() -> None:
 
 
 def test_option_chain_features_from_bronze_parses_contract_fields(tmp_path: Path) -> None:
-    bronze_files = save_option_ticker_snapshot_parquet_lake(
+    bronze_files = save_options_ticker_snapshot_parquet_lake(
         rows_by_currency={"BTC": [_sample_option_row()]},
         lake_root=str(tmp_path / "bronze"),
     )
@@ -86,7 +86,7 @@ def test_option_chain_features_from_bronze_parses_contract_fields(tmp_path: Path
 
 
 def test_option_chain_features_from_bronze_flags_invalid_instrument_name(tmp_path: Path) -> None:
-    bronze_files = save_option_ticker_snapshot_parquet_lake(
+    bronze_files = save_options_ticker_snapshot_parquet_lake(
         rows_by_currency={"BTC": [_sample_option_row(instrument_name="BAD-SYMBOL")]},
         lake_root=str(tmp_path / "bronze"),
     )
@@ -99,7 +99,7 @@ def test_option_chain_features_from_bronze_flags_invalid_instrument_name(tmp_pat
 def test_transform_option_bronze_to_silver_writes_monthly_artifacts(tmp_path: Path) -> None:
     bronze_root = tmp_path / "bronze"
     silver_root = tmp_path / "silver"
-    save_option_ticker_snapshot_parquet_lake(
+    save_options_ticker_snapshot_parquet_lake(
         rows_by_currency={"BTC": [_sample_option_row()]},
         lake_root=str(bronze_root),
     )

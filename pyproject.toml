@@ -17,6 +17,7 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "mypy~=1.20.2",
+  "pyright~=1.1.407",
   "pytest~=9.0.3",
   "ruff~=0.15.12",
 ]
@@ -33,7 +34,8 @@ exclude = ["tests*", "notebooks*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
-addopts = "-q"
+addopts = "-q --strict-config --strict-markers"
+filterwarnings = ["error"]
 
 [tool.ruff]
 line-length = 120
@@ -48,3 +50,20 @@ strict = true
 warn_unused_configs = true
 mypy_path = "."
 exclude = ["notebooks/"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+include = ["api", "domain", "ingestion", "sources", "main.py"]
+exclude = ["notebooks"]
+reportMissingImports = "none"
+reportMissingTypeStubs = "none"
+reportImportCycles = "error"
+reportImplicitOverride = "none"
+reportUnknownMemberType = "none"
+reportUnknownArgumentType = "none"
+reportUnknownVariableType = "none"
+reportUnknownLambdaType = "none"
+reportUnknownParameterType = "none"
+reportMissingParameterType = "none"
+reportMissingTypeArgument = "warning"

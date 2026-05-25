@@ -83,12 +83,12 @@ from ingestion.options import (
     OPTION_TICKER_SCHEMA_VERSION,
     OPTION_TICKER_SOURCE,
     OptionTickerSnapshotRow,
-    normalize_option_ticker_rows,
+    normalize_options_ticker_rows,
     snapshot_time_floor_minute,
     utc_run_id,
 )
 from ingestion.options_gold import transform_option_silver_to_gold
-from ingestion.options_lake import save_option_ticker_snapshot_parquet_lake
+from ingestion.options_lake import save_options_ticker_snapshot_parquet_lake
 from ingestion.options_silver import transform_option_bronze_to_silver
 from ingestion.silver import transform_l2_bronze_to_silver
 from sources.deribit_index_price import fetch_index_price
@@ -955,7 +955,7 @@ def _run_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger
     for currency in currencies:
         source_currency = source_currency_by_requested.get(currency, "")
         raw_rows = raw_rows_by_currency.get(currency, [])
-        rows, row_errors = normalize_option_ticker_rows(
+        rows, row_errors = normalize_options_ticker_rows(
             raw_rows,
             requested_currency=currency,
             source_currency=source_currency,
@@ -970,7 +970,7 @@ def _run_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger
 
     output_files: list[str] = []
     if bool(args.save_parquet_lake):
-        output_files = save_option_ticker_snapshot_parquet_lake(
+        output_files = save_options_ticker_snapshot_parquet_lake(
             rows_by_currency=rows_by_currency,
             lake_root=cast(str, args.lake_root),
         )

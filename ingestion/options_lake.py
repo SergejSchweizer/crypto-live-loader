@@ -25,7 +25,7 @@ def option_snapshot_partition_path(lake_root: str, key: OptionPartitionKey) -> P
     )
 
 
-def option_ticker_snapshot_record(row: OptionTickerSnapshotRow) -> dict[str, object]:
+def options_ticker_snapshot_record(row: OptionTickerSnapshotRow) -> dict[str, object]:
     """Convert one typed option snapshot row to a parquet record."""
 
     return {
@@ -63,7 +63,7 @@ def option_ticker_snapshot_record(row: OptionTickerSnapshotRow) -> dict[str, obj
     }
 
 
-def save_option_ticker_snapshot_parquet_lake(
+def save_options_ticker_snapshot_parquet_lake(
     rows_by_currency: dict[str, list[OptionTickerSnapshotRow]],
     lake_root: str,
 ) -> list[str]:
@@ -85,7 +85,7 @@ def save_option_ticker_snapshot_parquet_lake(
                 row.currency,
                 row.snapshot_time.strftime("%Y-%m-%d"),
             )
-            grouped[key].append(option_ticker_snapshot_record(row))
+            grouped[key].append(options_ticker_snapshot_record(row))
 
     written_files: list[str] = []
     for key, records in grouped.items():
@@ -98,3 +98,18 @@ def save_option_ticker_snapshot_parquet_lake(
         written_files.append(str(file_path.resolve()))
 
     return sorted(written_files)
+
+
+def option_ticker_snapshot_record(row: OptionTickerSnapshotRow) -> dict[str, object]:
+    """Backward-compatible alias for options ticker record serialization."""
+
+    return options_ticker_snapshot_record(row)
+
+
+def save_option_ticker_snapshot_parquet_lake(
+    rows_by_currency: dict[str, list[OptionTickerSnapshotRow]],
+    lake_root: str,
+) -> list[str]:
+    """Backward-compatible alias for options ticker parquet persistence."""
+
+    return save_options_ticker_snapshot_parquet_lake(rows_by_currency=rows_by_currency, lake_root=lake_root)

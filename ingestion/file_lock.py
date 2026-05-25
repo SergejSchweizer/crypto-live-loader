@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -13,7 +13,7 @@ DEFAULT_LOCK_POLL_INTERVAL_S = 0.1
 
 
 @contextmanager
-def locked_output_path(path: Path, timeout_s: float = DEFAULT_LOCK_TIMEOUT_S) -> Iterator[None]:
+def locked_output_path(path: Path, timeout_s: float = DEFAULT_LOCK_TIMEOUT_S) -> Generator[None, None, None]:
     """Acquire an exclusive filesystem lock for one output path."""
 
     lock_path = path.with_name(f".{path.name}.lock")
@@ -33,8 +33,7 @@ def locked_output_path(path: Path, timeout_s: float = DEFAULT_LOCK_TIMEOUT_S) ->
     try:
         yield
     finally:
-        if lock_fd is not None:
-            os.close(lock_fd)
+        os.close(lock_fd)
         try:
             lock_path.unlink()
         except FileNotFoundError:

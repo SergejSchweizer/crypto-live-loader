@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -76,6 +77,6 @@ def normalize_index_price_snapshot_row(
     )
 
 
-def _raw_payload_hash(row: dict[str, object]) -> str:
+def _raw_payload_hash(row: Mapping[str, object]) -> str:
     encoded = json.dumps(row, sort_keys=True, separators=(",", ":"), default=str).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()

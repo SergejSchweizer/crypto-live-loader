@@ -9,7 +9,9 @@ from datetime import UTC, datetime
 
 from sources.deribit_options import DERIBIT_OPTIONS_SOURCE
 
-OPTION_TICKER_DATASET_TYPE = "option_ticker_snapshot_1m"
+OPTIONS_TICKER_DATASET_TYPE = "options_ticker_snapshot_1m"
+LEGACY_OPTION_TICKER_DATASET_TYPE = "option_ticker_snapshot_1m"
+OPTION_TICKER_DATASET_TYPE = OPTIONS_TICKER_DATASET_TYPE
 OPTION_TICKER_SCHEMA_VERSION = "v1"
 OPTION_TICKER_SOURCE = "rest_get_book_summary_by_currency"
 
@@ -65,7 +67,7 @@ def snapshot_time_floor_minute(now: datetime | None = None) -> datetime:
     return utc_base.replace(second=0, microsecond=0)
 
 
-def normalize_option_ticker_rows(
+def normalize_options_ticker_rows(
     rows: list[dict[str, object]],
     *,
     requested_currency: str,
@@ -81,7 +83,7 @@ def normalize_option_ticker_rows(
     normalized: list[OptionTickerSnapshotRow] = []
     errors: list[str] = []
     for row in rows:
-        normalized_row = _normalize_option_ticker_row(
+        normalized_row = _normalize_options_ticker_row(
             row=row,
             requested_currency=requested_currency,
             source_currency=source_currency,
@@ -101,7 +103,7 @@ def normalize_option_ticker_rows(
     return normalized, errors
 
 
-def _normalize_option_ticker_row(
+def _normalize_options_ticker_row(
     *,
     row: dict[str, object],
     requested_currency: str,
@@ -122,7 +124,7 @@ def _normalize_option_ticker_row(
 
     return OptionTickerSnapshotRow(
         exchange="deribit",
-        dataset_type=OPTION_TICKER_DATASET_TYPE,
+        dataset_type=OPTIONS_TICKER_DATASET_TYPE,
         source=source,
         currency=requested_currency,
         requested_currency=requested_currency,
@@ -196,3 +198,28 @@ def source_endpoint_name() -> str:
     """Return the external source endpoint identifier."""
 
     return DERIBIT_OPTIONS_SOURCE
+
+
+def normalize_option_ticker_rows(
+    rows: list[dict[str, object]],
+    *,
+    requested_currency: str,
+    source_currency: str,
+    run_id: str,
+    snapshot_time: datetime,
+    ingested_at: datetime,
+    source: str = OPTION_TICKER_SOURCE,
+    schema_version: str = OPTION_TICKER_SCHEMA_VERSION,
+) -> tuple[list[OptionTickerSnapshotRow], list[str]]:
+    """Backward-compatible alias for options ticker row normalization."""
+
+    return normalize_options_ticker_rows(
+        rows,
+        requested_currency=requested_currency,
+        source_currency=source_currency,
+        run_id=run_id,
+        snapshot_time=snapshot_time,
+        ingested_at=ingested_at,
+        source=source,
+        schema_version=schema_version,
+    )

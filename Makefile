@@ -1,6 +1,6 @@
 PYTHON ?= .venv/bin/python
 
-.PHONY: setup test lint typecheck check
+.PHONY: setup test lint typecheck typecheck-strict check
 
 setup:
 	python3 -m venv .venv
@@ -16,4 +16,7 @@ lint:
 typecheck:
 	$(PYTHON) -m mypy .
 
-check: lint typecheck test
+typecheck-strict:
+	$(PYTHON) -m pyright
+
+check: lint typecheck typecheck-strict test

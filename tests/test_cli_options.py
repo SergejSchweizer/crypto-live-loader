@@ -51,7 +51,7 @@ def _isolate_cli_test_logs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
 def _sample_option_row(currency: str, source_currency: str, instrument_name: str) -> OptionTickerSnapshotRow:
     return OptionTickerSnapshotRow(
         exchange="deribit",
-        dataset_type="option_ticker_snapshot_1m",
+        dataset_type="options_ticker_snapshot_1m",
         source="rest_get_book_summary_by_currency",
         currency=currency,
         requested_currency=currency,
@@ -105,7 +105,7 @@ def test_cli_options_bronze_builder_outputs_json(
     )
     monkeypatch.setattr(
         cli,
-        "normalize_option_ticker_rows",
+        "normalize_options_ticker_rows",
         lambda rows, **kwargs: (
             [
                 _sample_option_row(
@@ -119,7 +119,7 @@ def test_cli_options_bronze_builder_outputs_json(
             [],
         ),
     )
-    monkeypatch.setattr(cli, "save_option_ticker_snapshot_parquet_lake", lambda **kwargs: ["/tmp/options.parquet"])
+    monkeypatch.setattr(cli, "save_options_ticker_snapshot_parquet_lake", lambda **kwargs: ["/tmp/options.parquet"])
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -135,7 +135,7 @@ def test_cli_options_bronze_builder_outputs_json(
     output = json.loads(capsys.readouterr().out)
 
     assert output["command"] == OPTIONS_BRONZE_BUILDER_COMMAND
-    assert output["dataset_type"] == "option_ticker_snapshot_1m"
+    assert output["dataset_type"] == "options_ticker_snapshot_1m"
     assert output["currency_results"]["BTC"]["status"] == "ok"
     assert output["output_files"] == ["/tmp/options.parquet"]
 
@@ -164,7 +164,7 @@ def test_partial_currency_failure_still_writes_successful_assets(
     )
     monkeypatch.setattr(
         cli,
-        "normalize_option_ticker_rows",
+        "normalize_options_ticker_rows",
         lambda rows, **kwargs: (
             [
                 _sample_option_row(
@@ -179,7 +179,7 @@ def test_partial_currency_failure_still_writes_successful_assets(
     )
     monkeypatch.setattr(
         cli,
-        "save_option_ticker_snapshot_parquet_lake",
+        "save_options_ticker_snapshot_parquet_lake",
         lambda **kwargs: ["/tmp/btc.parquet", "/tmp/sol.parquet"],
     )
     monkeypatch.setattr(
@@ -217,7 +217,7 @@ def test_options_bronze_legacy_currencies_flag_is_still_supported(
     monkeypatch.setattr(cli, "_fetch_options_rows_for_currencies", fake_fetch)
     monkeypatch.setattr(
         cli,
-        "normalize_option_ticker_rows",
+        "normalize_options_ticker_rows",
         lambda rows, **kwargs: ([], []),
     )
     monkeypatch.setattr(

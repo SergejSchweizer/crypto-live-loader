@@ -7,7 +7,6 @@ import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from time import monotonic
-from typing import cast
 
 from domain.contracts import SourceAdapter
 from domain.models import RawSnapshot
@@ -330,11 +329,3 @@ def l2_snapshot_partition_key(
         snapshot.timestamp.strftime("%Y-%m"),
         snapshot.timestamp.strftime("%Y-%m-%d"),
     )
-
-
-def _optional_float(value: object) -> float | None:
-    """Convert optional numeric values to floats."""
-
-    if value is None:
-        return None
-    return float(cast(int | float, value))

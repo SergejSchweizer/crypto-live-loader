@@ -17,6 +17,8 @@ class SourceAdapter(Protocol):
 
     def normalize_symbol(self, symbol: str) -> str:
         """Normalize one user-provided symbol to source-native symbol."""
+        ...
 
     def fetch_snapshot(self, symbol: str, depth: int) -> RawSnapshot:
         """Fetch one canonical snapshot from a source symbol."""
+        ...

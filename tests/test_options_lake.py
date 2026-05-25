@@ -8,13 +8,13 @@ from pathlib import Path
 import pyarrow.parquet as pq
 
 from ingestion.options import OptionTickerSnapshotRow
-from ingestion.options_lake import option_snapshot_partition_path, save_option_ticker_snapshot_parquet_lake
+from ingestion.options_lake import option_snapshot_partition_path, save_options_ticker_snapshot_parquet_lake
 
 
 def _sample_row(currency: str = "BTC", instrument_name: str = "BTC-30JUN26-120000-C") -> OptionTickerSnapshotRow:
     return OptionTickerSnapshotRow(
         exchange="deribit",
-        dataset_type="option_ticker_snapshot_1m",
+        dataset_type="options_ticker_snapshot_1m",
         source="rest_get_book_summary_by_currency",
         currency=currency,
         requested_currency=currency,
@@ -52,24 +52,24 @@ def test_bronze_partition_path() -> None:
 
     result = option_snapshot_partition_path(
         "lake/bronze",
-        ("option_ticker_snapshot_1m", "deribit", "option", "BTC", "2026-05-24"),
+        ("options_ticker_snapshot_1m", "deribit", "option", "BTC", "2026-05-24"),
     )
     assert str(result).endswith(
-        "dataset_type=option_ticker_snapshot_1m/exchange=deribit/instrument_type=option/currency=BTC/"
+        "dataset_type=options_ticker_snapshot_1m/exchange=deribit/instrument_type=option/currency=BTC/"
         "source=rest_get_book_summary_by_currency/date=2026-05-24"
     )
 
 
-def test_save_option_ticker_snapshot_parquet_lake_writes_partitioned_files(tmp_path: Path) -> None:
+def test_save_options_ticker_snapshot_parquet_lake_writes_partitioned_files(tmp_path: Path) -> None:
     """Option bronze writer should persist run-partitioned parquet files."""
 
-    files = save_option_ticker_snapshot_parquet_lake(
+    files = save_options_ticker_snapshot_parquet_lake(
         rows_by_currency={"BTC": [_sample_row()]},
         lake_root=str(tmp_path),
     )
 
     assert len(files) == 1
-    assert "dataset_type=option_ticker_snapshot_1m" in files[0]
+    assert "dataset_type=options_ticker_snapshot_1m" in files[0]
     assert "part-20260524T071500000000Z.parquet" in files[0]
 
     rows = pq.ParquetFile(files[0]).read().to_pylist()  # type: ignore[no-untyped-call]

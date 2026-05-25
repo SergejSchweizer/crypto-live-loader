@@ -42,10 +42,13 @@ def option_silver_transform_state_path(silver_lake_root: str) -> Path:
     return Path(silver_lake_root) / SILVER_OPTION_STATE_FILE_NAME
 
 
-def option_bronze_parquet_files(bronze_lake_root: str) -> list[Path]:
+def options_bronze_parquet_files(bronze_lake_root: str) -> list[Path]:
     """Return option bronze parquet inputs in deterministic order."""
 
-    return sorted(Path(bronze_lake_root).glob("dataset_type=option_ticker_snapshot_1m/**/*.parquet"))
+    root = Path(bronze_lake_root)
+    files = list(root.glob("dataset_type=options_ticker_snapshot_1m/**/*.parquet"))
+    files.extend(root.glob("dataset_type=option_ticker_snapshot_1m/**/*.parquet"))
+    return sorted({path.resolve(): path for path in files}.values())
 
 
 def transform_option_bronze_to_silver(
@@ -56,7 +59,7 @@ def transform_option_bronze_to_silver(
 ) -> list[str]:
     """Transform bronze option snapshots into monthly silver option chain partitions."""
 
-    bronze_files = option_bronze_parquet_files(bronze_lake_root)
+    bronze_files = options_bronze_parquet_files(bronze_lake_root)
     if not bronze_files:
         return []
 
@@ -92,6 +95,12 @@ def transform_option_bronze_to_silver(
         },
     )
     return written_files
+
+
+def option_bronze_parquet_files(bronze_lake_root: str) -> list[Path]:
+    """Backward-compatible alias for options bronze parquet discovery."""
+
+    return options_bronze_parquet_files(bronze_lake_root)
 
 
 def option_chain_features_from_bronze(bronze: pl.DataFrame) -> pl.DataFrame:
