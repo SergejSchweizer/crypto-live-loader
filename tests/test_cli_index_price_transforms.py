@@ -56,7 +56,7 @@ def test_cli_index_price_gold_builder_outputs_json(
     monkeypatch.setattr(cli, "transform_index_price_silver_to_gold", lambda **_: ["/tmp/index_gold.parquet"])
     monkeypatch.setattr(
         "sys.argv",
-        ["main.py", INDEX_PRICE_GOLD_BUILDER_COMMAND, "--silver-lake-root", "s", "--gold-lake-root", "g"],
+        ["main.py", INDEX_PRICE_GOLD_BUILDER_COMMAND, "--silver-lake-root", "s", "--gold-lake-root", "g", "--debug"],
     )
     cli.main()
     output = json.loads(capsys.readouterr().out)

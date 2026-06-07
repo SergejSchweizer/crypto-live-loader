@@ -122,6 +122,23 @@ def _boolean_optional_flag(
     )
 
 
+def _debug_flag(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        default=False,
+        help="Enable DEBUG-level logging for this command",
+    )
+
+
+def _enable_debug_logging(args: argparse.Namespace, logger: logging.Logger) -> None:
+    if not bool(getattr(args, "debug", False)):
+        return
+    logger.setLevel(logging.DEBUG)
+    for handler in logger.handlers:
+        handler.setLevel(logging.DEBUG)
+
+
 def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
     """Create the CLI parser."""
 
@@ -188,6 +205,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         default=config_bool(ingestion_config, "json_output", True),
         help="Print JSON output",
     )
+    _debug_flag(l2_parser)
 
     options_config = config_section(ingestion_config, "options")
     options_parser = subparsers.add_parser(
@@ -235,6 +253,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         default=config_bool(options_config, "json_output", config_bool(ingestion_config, "json_output", True)),
         help="Print JSON output",
     )
+    _debug_flag(options_parser)
 
     instrument_metadata_config = config_section(ingestion_config, "instrument_metadata")
     instrument_metadata_parser = subparsers.add_parser(
@@ -288,6 +307,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         config_bool(instrument_metadata_config, "json_output", config_bool(ingestion_config, "json_output", True)),
         "Print JSON output",
     )
+    _debug_flag(instrument_metadata_parser)
 
     index_price_config = config_section(ingestion_config, "index_price")
     index_price_parser = subparsers.add_parser(
@@ -328,6 +348,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         config_bool(index_price_config, "json_output", config_bool(ingestion_config, "json_output", True)),
         "Print JSON output",
     )
+    _debug_flag(index_price_parser)
 
     instrument_metadata_silver_parser = subparsers.add_parser(
         INSTRUMENT_METADATA_SILVER_BUILDER_COMMAND,
@@ -349,6 +370,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         config_bool(instrument_metadata_config, "json_output", config_bool(ingestion_config, "json_output", True)),
         "Print JSON output",
     )
+    _debug_flag(instrument_metadata_silver_parser)
 
     index_price_silver_parser = subparsers.add_parser(
         INDEX_PRICE_SILVER_BUILDER_COMMAND,
@@ -370,6 +392,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         config_bool(index_price_config, "json_output", config_bool(ingestion_config, "json_output", True)),
         "Print JSON output",
     )
+    _debug_flag(index_price_silver_parser)
 
     instrument_metadata_gold_parser = subparsers.add_parser(
         INSTRUMENT_METADATA_GOLD_BUILDER_COMMAND,
@@ -415,6 +438,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         config_bool(instrument_metadata_config, "json_output", config_bool(ingestion_config, "json_output", True)),
         "Print JSON output",
     )
+    _debug_flag(instrument_metadata_gold_parser)
 
     index_price_gold_parser = subparsers.add_parser(
         INDEX_PRICE_GOLD_BUILDER_COMMAND,
@@ -460,6 +484,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         config_bool(index_price_config, "json_output", config_bool(ingestion_config, "json_output", True)),
         "Print JSON output",
     )
+    _debug_flag(index_price_gold_parser)
     options_silver_parser = subparsers.add_parser(
         OPTIONS_SILVER_BUILDER_COMMAND,
         help="Transform bronze option snapshots into monthly silver option chain features",
@@ -492,6 +517,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         config_bool(options_config, "json_output", config_bool(ingestion_config, "json_output", True)),
         "Print JSON output",
     )
+    _debug_flag(options_silver_parser)
     options_gold_parser = subparsers.add_parser(
         OPTIONS_GOLD_BUILDER_COMMAND,
         help="Transform options Silver features into Gold option surface artifacts",
@@ -536,6 +562,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         config_bool(options_config, "json_output", config_bool(ingestion_config, "json_output", True)),
         "Print JSON output",
     )
+    _debug_flag(options_gold_parser)
 
     silver_parser = subparsers.add_parser(
         SILVER_BUILDER_COMMAND,
@@ -576,6 +603,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         config_bool(ingestion_config, "json_output", True),
         "Print JSON output",
     )
+    _debug_flag(silver_parser)
 
     gold_parser = subparsers.add_parser(
         GOLD_BUILDER_COMMAND,
@@ -634,6 +662,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         config_bool(ingestion_config, "json_output", True),
         "Print JSON output",
     )
+    _debug_flag(gold_parser)
 
     validate_parser = subparsers.add_parser(
         VALIDATE_SYMBOLS_COMMAND,
@@ -663,6 +692,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         default=True,
         help="Print JSON output",
     )
+    _debug_flag(validate_parser)
 
     return parser
 
@@ -1199,9 +1229,21 @@ def _run_index_price_silver_builder(args: argparse.Namespace, logger: logging.Lo
 def _run_instrument_metadata_gold_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
     """Run Silver-to-Gold instrument metadata summary transformation."""
 
+    _enable_debug_logging(args=args, logger=logger)
     started_at = perf_counter()
     silver_lake_root = cast(str, args.silver_lake_root)
     gold_lake_root = cast(str, args.gold_lake_root)
+    logger.debug(
+        "instrument-metadata-gold-builder debug configuration silver_lake_root=%s gold_lake_root=%s "
+        "plot=%s manifest=%s fill_missing_minutes=%s fill_policy=%s json_output=%s",
+        silver_lake_root,
+        gold_lake_root,
+        bool(args.plot),
+        bool(args.manifest),
+        bool(args.fill_missing_minutes),
+        cast(str, args.fill_policy),
+        bool(args.json_output),
+    )
     written_files = transform_instrument_metadata_silver_to_gold(
         silver_lake_root=silver_lake_root,
         gold_lake_root=gold_lake_root,
@@ -1235,9 +1277,21 @@ def _run_instrument_metadata_gold_builder(args: argparse.Namespace, logger: logg
 def _run_index_price_gold_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
     """Run Silver-to-Gold index price transformation."""
 
+    _enable_debug_logging(args=args, logger=logger)
     started_at = perf_counter()
     silver_lake_root = cast(str, args.silver_lake_root)
     gold_lake_root = cast(str, args.gold_lake_root)
+    logger.debug(
+        "index-price-gold-builder debug configuration silver_lake_root=%s gold_lake_root=%s plot=%s "
+        "manifest=%s fill_missing_minutes=%s fill_policy=%s json_output=%s",
+        silver_lake_root,
+        gold_lake_root,
+        bool(args.plot),
+        bool(args.manifest),
+        bool(args.fill_missing_minutes),
+        cast(str, args.fill_policy),
+        bool(args.json_output),
+    )
     written_files = transform_index_price_silver_to_gold(
         silver_lake_root=silver_lake_root,
         gold_lake_root=gold_lake_root,
@@ -1337,9 +1391,21 @@ def _run_silver_builder(args: argparse.Namespace, logger: logging.Logger) -> Non
 def _run_options_gold_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
     """Run Silver-to-Gold options surface transformation."""
 
+    _enable_debug_logging(args=args, logger=logger)
     started_at = perf_counter()
     silver_lake_root = cast(str, args.silver_lake_root)
     gold_lake_root = cast(str, args.gold_lake_root)
+    logger.debug(
+        "options-gold-builder debug configuration silver_lake_root=%s gold_lake_root=%s plot=%s manifest=%s "
+        "fill_missing_minutes=%s fill_policy=%s json_output=%s",
+        silver_lake_root,
+        gold_lake_root,
+        bool(args.plot),
+        bool(args.manifest),
+        bool(args.fill_missing_minutes),
+        cast(str, args.fill_policy),
+        bool(args.json_output),
+    )
     written_files = transform_option_silver_to_gold(
         silver_lake_root=silver_lake_root,
         gold_lake_root=gold_lake_root,
@@ -1374,11 +1440,26 @@ def _run_options_gold_builder(args: argparse.Namespace, logger: logging.Logger) 
 def _run_gold_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
     """Run Silver-to-Gold M1 L2 feature transformation."""
 
+    _enable_debug_logging(args=args, logger=logger)
     started_at = perf_counter()
     silver_lake_root = cast(str, args.silver_lake_root)
     gold_lake_root = cast(str, args.gold_lake_root)
     expected_snapshots_per_minute = int(args.expected_snapshots_per_minute)
     completeness_threshold = float(args.completeness_threshold)
+    logger.debug(
+        "l2-gold-builder debug configuration silver_lake_root=%s gold_lake_root=%s "
+        "expected_snapshots_per_minute=%s completeness_threshold=%.3f plot=%s manifest=%s "
+        "fill_missing_minutes=%s fill_policy=%s json_output=%s",
+        silver_lake_root,
+        gold_lake_root,
+        expected_snapshots_per_minute,
+        completeness_threshold,
+        bool(args.plot),
+        bool(args.manifest),
+        bool(args.fill_missing_minutes),
+        cast(str, args.fill_policy),
+        bool(args.json_output),
+    )
     written_files = transform_l2_silver_to_gold(
         silver_lake_root=silver_lake_root,
         gold_lake_root=gold_lake_root,
@@ -1570,8 +1651,14 @@ def command_handlers() -> dict[str, CommandHandler]:
 def dispatch_command(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
     """Dispatch one parsed command to its registered handler."""
 
+    _enable_debug_logging(args=args, logger=logger)
     handlers = command_handlers()
     command = cast(str, args.command)
+    logger.debug(
+        "cli dispatch debug command=%s args=%s",
+        command,
+        {key: value for key, value in sorted(vars(args).items()) if key != "command"},
+    )
     handler = handlers.get(command)
     if handler is None:
         raise ValueError(f"Unsupported command '{command}'")

@@ -66,7 +66,15 @@ def test_cli_instrument_metadata_gold_builder_outputs_json(
     )
     monkeypatch.setattr(
         "sys.argv",
-        ["main.py", INSTRUMENT_METADATA_GOLD_BUILDER_COMMAND, "--silver-lake-root", "s", "--gold-lake-root", "g"],
+        [
+            "main.py",
+            INSTRUMENT_METADATA_GOLD_BUILDER_COMMAND,
+            "--silver-lake-root",
+            "s",
+            "--gold-lake-root",
+            "g",
+            "--debug",
+        ],
     )
     cli.main()
     output = json.loads(capsys.readouterr().out)

@@ -11,7 +11,7 @@ import polars as pl
 from ingestion.artifact_io import timestamp_bounds_iso, write_json_artifact
 from ingestion.artifact_state import file_fingerprints, load_json_state, write_json_state
 from ingestion.incremental import inputs_unchanged
-from ingestion.polars_parquet_store import upsert_partition_parquet
+from ingestion.polars_parquet_store import is_committed_parquet_path, upsert_partition_parquet
 
 OPTION_SURFACE_DATASET_TYPE = "option_surface_m1"
 OPTION_SURFACE_SCHEMA_VERSION = "v1"
@@ -36,7 +36,11 @@ def option_gold_transform_state_path(gold_lake_root: str) -> Path:
 def option_silver_parquet_files(silver_lake_root: str) -> list[Path]:
     """Return options Silver parquet inputs in deterministic order."""
 
-    return sorted(Path(silver_lake_root).glob("dataset_type=option_chain_features_1m/**/*.parquet"))
+    return sorted(
+        path
+        for path in Path(silver_lake_root).glob("dataset_type=option_chain_features_1m/**/*.parquet")
+        if is_committed_parquet_path(path)
+    )
 
 
 def transform_option_silver_to_gold(
