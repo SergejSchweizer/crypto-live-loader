@@ -52,7 +52,7 @@ def transform_index_price_silver_to_gold(
 
     silver = pl.read_parquet([str(path) for path in silver_files])
     gold = _gold_index_price_from_silver(silver)
-    written_files = _write_gold_index_price(gold=gold, lake_root=gold_lake_root)
+    written_files = _write_gold_index_price(gold=gold, lake_root=gold_lake_root, plot=plot)
     write_json_state(
         state_path,
         {
@@ -102,7 +102,7 @@ def _gold_index_price_from_silver(silver: pl.DataFrame) -> pl.DataFrame:
     )
 
 
-def _write_gold_index_price(gold: pl.DataFrame, lake_root: str) -> list[str]:
+def _write_gold_index_price(gold: pl.DataFrame, lake_root: str, plot: bool = True) -> list[str]:
     written_files: list[str] = []
     if gold.is_empty():
         return written_files
@@ -126,4 +126,37 @@ def _write_gold_index_price(gold: pl.DataFrame, lake_root: str) -> list[str]:
             sort_by="ts_minute",
         )
         written_files.append(str(file_path.resolve()))
+        if plot:
+            plot_path = out_dir / "data.png"
+            _write_gold_index_price_plot(partition.sort("ts_minute"), plot_path)
+            written_files.append(str(plot_path.resolve()))
     return sorted(written_files)
+
+
+def _write_gold_index_price_plot(gold: pl.DataFrame, path: Path) -> None:
+    """Write a compact PNG profile for one Gold index-price partition."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    columns = ["price_close", "price_mean", "log_return_1m_mean", "snapshot_count"]
+    present = [column for column in columns if column in gold.columns]
+    if not present:
+        path.touch()
+        return
+
+    fig, axes = plt.subplots(len(present), 1, figsize=(12, max(4, len(present) * 1.8)), squeeze=False)
+    fig.patch.set_facecolor("#111217")
+    ts_values = gold["ts_minute"].to_list()
+    for index, column in enumerate(present):
+        axis = axes[index][0]
+        axis.set_facecolor("#161922")
+        axis.plot(ts_values, gold[column].to_list(), color="#88c0d0", linewidth=0.9)
+        axis.set_title(column, color="#eceff4", fontsize=9, loc="left")
+        axis.tick_params(colors="#d8dee9", labelsize=7)
+    fig.tight_layout()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=120, facecolor=fig.get_facecolor())
+    plt.close(fig)
