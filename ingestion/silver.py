@@ -66,14 +66,19 @@ def transform_l2_bronze_to_silver(
         current_fingerprints=current_fingerprints,
         include_all=not transform_settings_unchanged,
     )
-    bronze = pl.read_parquet([str(path) for path in changed_files])
-    silver = silver_l2_features_from_bronze(bronze=bronze, depth=depth)
-    written_files = save_silver_l2_snapshot_features(
-        silver=silver,
-        lake_root=silver_lake_root,
-        plot=plot,
-        manifest=manifest,
-    )
+    written_files: set[str] = set()
+    for group in _l2_bronze_file_groups(changed_files):
+        bronze = pl.read_parquet([str(path) for path in group])
+        silver = silver_l2_features_from_bronze(bronze=bronze, depth=depth)
+        written_files.update(
+            save_silver_l2_snapshot_features(
+                silver=silver,
+                lake_root=silver_lake_root,
+                plot=False,
+                manifest=False,
+            )
+        )
+    written_files = _refresh_silver_l2_artifacts(written_files, plot=plot, manifest=manifest)
     write_json_state(
         state_path,
         {
@@ -83,16 +88,37 @@ def transform_l2_bronze_to_silver(
             "depth": depth,
             "bronze_inputs": current_fingerprints,
             "last_changed_inputs": [str(path.resolve()) for path in changed_files],
-            "last_written_files": written_files,
+            "last_written_files": sorted(written_files),
         },
     )
-    return written_files
+    return sorted(written_files)
 
 
 def bronze_parquet_files(bronze_lake_root: str) -> list[Path]:
     """Return Bronze parquet inputs in deterministic order."""
 
     return sorted(Path(bronze_lake_root).glob("dataset_type=l2_snapshot/**/*.parquet"))
+
+
+def _l2_bronze_file_groups(files: list[Path]) -> list[list[Path]]:
+    """Group changed L2 inputs by output symbol and month for one monthly upsert."""
+
+    grouped: dict[tuple[str, str], list[Path]] = {}
+    for path in files:
+        key = (
+            _path_partition_value(path, "symbol") or "",
+            _path_partition_value(path, "month") or "",
+        )
+        grouped.setdefault(key, []).append(path)
+    return [sorted(group) for _, group in sorted(grouped.items())]
+
+
+def _path_partition_value(path: Path, name: str) -> str | None:
+    prefix = f"{name}="
+    for part in path.parts:
+        if part.startswith(prefix):
+            return part[len(prefix) :]
+    return None
 
 
 def silver_transform_state_path(silver_lake_root: str) -> Path:
@@ -240,6 +266,27 @@ def save_silver_l2_snapshot_features(
             written_files.append(str(plot_path.resolve()))
 
     return sorted(written_files)
+
+
+def _refresh_silver_l2_artifacts(parquet_files: set[str], plot: bool, manifest: bool) -> set[str]:
+    """Refresh optional artifacts once for each touched Silver parquet partition."""
+
+    written_files = set(parquet_files)
+    if not plot and not manifest:
+        return written_files
+
+    for parquet_file in sorted(parquet_files):
+        parquet_path = Path(parquet_file)
+        silver = pl.read_parquet(parquet_path)
+        if manifest:
+            metadata_path = parquet_path.with_suffix(".json")
+            write_json_artifact(metadata_path, silver_artifact_metadata(silver))
+            written_files.add(str(metadata_path.resolve()))
+        if plot:
+            plot_path = parquet_path.with_suffix(".png")
+            write_silver_profile_png(silver=silver, path=plot_path)
+            written_files.add(str(plot_path.resolve()))
+    return written_files
 
 
 def silver_artifact_metadata(silver: pl.DataFrame) -> dict[str, Any]:

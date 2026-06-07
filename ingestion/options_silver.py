@@ -75,14 +75,19 @@ def transform_option_bronze_to_silver(
         current_fingerprints=current_fingerprints,
     )
 
-    bronze = pl.read_parquet([str(path) for path in changed_files])
-    silver = option_chain_features_from_bronze(bronze)
-    written_files = save_silver_option_chain_features(
-        silver=silver,
-        lake_root=silver_lake_root,
-        plot=plot,
-        manifest=manifest,
-    )
+    written_files: set[str] = set()
+    for group in _option_bronze_file_groups(changed_files):
+        bronze = pl.read_parquet([str(path) for path in group])
+        silver = option_chain_features_from_bronze(bronze)
+        written_files.update(
+            save_silver_option_chain_features(
+                silver=silver,
+                lake_root=silver_lake_root,
+                plot=False,
+                manifest=False,
+            )
+        )
+    written_files = _refresh_silver_option_artifacts(written_files, plot=plot, manifest=manifest)
     write_json_state(
         state_path,
         {
@@ -91,10 +96,32 @@ def transform_option_bronze_to_silver(
             "silver_lake_root": str(Path(silver_lake_root).resolve()),
             "bronze_inputs": current_fingerprints,
             "last_changed_inputs": [str(path.resolve()) for path in changed_files],
-            "last_written_files": written_files,
+            "last_written_files": sorted(written_files),
         },
     )
-    return written_files
+    return sorted(written_files)
+
+
+def _option_bronze_file_groups(files: list[Path]) -> list[list[Path]]:
+    """Group changed option inputs by output currency and month for one monthly upsert."""
+
+    grouped: dict[tuple[str, str], list[Path]] = {}
+    for path in files:
+        key = (
+            _path_partition_value(path, "currency") or "",
+            _path_partition_value(path, "date", prefix_length=7) or "",
+        )
+        grouped.setdefault(key, []).append(path)
+    return [sorted(group) for _, group in sorted(grouped.items())]
+
+
+def _path_partition_value(path: Path, name: str, prefix_length: int | None = None) -> str | None:
+    prefix = f"{name}="
+    for part in path.parts:
+        if part.startswith(prefix):
+            value = part[len(prefix) :]
+            return value[:prefix_length] if prefix_length is not None else value
+    return None
 
 
 def option_bronze_parquet_files(bronze_lake_root: str) -> list[Path]:
@@ -254,6 +281,27 @@ def save_silver_option_chain_features(
             write_silver_option_profile_png(output, plot_path)
             written_files.append(str(plot_path.resolve()))
     return sorted(written_files)
+
+
+def _refresh_silver_option_artifacts(parquet_files: set[str], plot: bool, manifest: bool) -> set[str]:
+    """Refresh optional artifacts once for each touched Silver options partition."""
+
+    written_files = set(parquet_files)
+    if not plot and not manifest:
+        return written_files
+
+    for parquet_file in sorted(parquet_files):
+        parquet_path = Path(parquet_file)
+        silver = pl.read_parquet(parquet_path)
+        if manifest:
+            metadata_path = parquet_path.with_suffix(".json")
+            write_json_artifact(metadata_path, silver_option_artifact_metadata(silver))
+            written_files.add(str(metadata_path.resolve()))
+        if plot:
+            plot_path = parquet_path.with_suffix(".png")
+            write_silver_option_profile_png(silver, plot_path)
+            written_files.add(str(plot_path.resolve()))
+    return written_files
 
 
 def silver_option_artifact_metadata(silver: pl.DataFrame) -> dict[str, Any]:

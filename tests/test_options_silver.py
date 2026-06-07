@@ -21,8 +21,10 @@ from ingestion.options_silver import (
 def _sample_option_row(
     *,
     instrument_name: str = "BTC-30JUN26-120000-C",
+    day: int = 24,
     snapshot_second: int = 1,
 ) -> OptionTickerSnapshotRow:
+    snapshot_time = datetime(2026, 5, day, 7, 15, snapshot_second, tzinfo=UTC)
     return OptionTickerSnapshotRow(
         exchange="deribit",
         dataset_type="options_ticker_snapshot_1m",
@@ -34,9 +36,9 @@ def _sample_option_row(
         base_currency="BTC",
         quote_currency="BTC",
         instrument_type="option",
-        snapshot_time=datetime(2026, 5, 24, 7, 15, snapshot_second, tzinfo=UTC),
-        exchange_creation_time=datetime(2026, 5, 24, 7, 15, snapshot_second, tzinfo=UTC),
-        ingested_at=datetime(2026, 5, 24, 7, 15, snapshot_second, tzinfo=UTC),
+        snapshot_time=snapshot_time,
+        exchange_creation_time=snapshot_time,
+        ingested_at=snapshot_time,
         run_id="run-id",
         bid_price=0.01,
         ask_price=0.02,
@@ -122,3 +124,28 @@ def test_transform_option_bronze_to_silver_writes_monthly_artifacts(tmp_path: Pa
     metadata = json.loads(Path(json_file).read_text(encoding="utf-8"))
     assert metadata["dataset_type"] == "option_chain_features_1m"
     assert option_silver_transform_state_path(str(silver_root)).exists()
+
+
+def test_transform_option_bronze_to_silver_merges_monthly_partition_group(tmp_path: Path) -> None:
+    bronze_root = tmp_path / "bronze"
+    silver_root = tmp_path / "silver"
+    row_1 = _sample_option_row(day=24)
+    row_2 = _sample_option_row(day=25)
+    save_options_ticker_snapshot_parquet_lake(
+        rows_by_currency={"BTC": [row_1, row_2]},
+        lake_root=str(bronze_root),
+    )
+
+    files = transform_option_bronze_to_silver(
+        bronze_lake_root=str(bronze_root),
+        silver_lake_root=str(silver_root),
+        plot=False,
+        manifest=False,
+    )
+
+    parquet_files = sorted(file_path for file_path in files if file_path.endswith(".parquet"))
+    assert len(parquet_files) == 1
+    assert parquet_files[0].endswith("2026-05.parquet")
+    records = pl.read_parquet(parquet_files)
+    assert records.height == 2
+    assert records["ts_snapshot"].dt.date().to_list() == [row_1.snapshot_time.date(), row_2.snapshot_time.date()]
