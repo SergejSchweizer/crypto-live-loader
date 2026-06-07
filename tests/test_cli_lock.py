@@ -160,6 +160,28 @@ def test_l2_parser_defaults_to_five_snapshots_per_run() -> None:
     assert args.max_runtime_s == 50.0
 
 
+def test_job_event_logs_use_uniform_key_value_shape(caplog: pytest.LogCaptureFixture) -> None:
+    """Verify CLI job logs use one event envelope and stable key ordering."""
+
+    logger = logging.getLogger("test_uniform_job_event")
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        cli._log_job_event(
+            logger,
+            logging.INFO,
+            "example-builder",
+            "run_summary",
+            status="complete",
+            elapsed_s=1.23456,
+            symbols=["BTC", "ETH"],
+            files=2,
+        )
+
+    assert caplog.messages == [
+        "job_event command=example-builder event=run_summary elapsed_s=1.235 files=2 status=complete symbols=BTC,ETH"
+    ]
+
+
 def test_cron_layer_commands_accept_debug_flag() -> None:
     """Verify every scheduled Bronze, Silver, and Gold command accepts --debug."""
 

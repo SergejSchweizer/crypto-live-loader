@@ -76,7 +76,7 @@ ingestion/
   * bronze normalizers/writers
   * silver transforms
   * gold transforms
-  * state and artifact utilities
+  * state, parquet, plotting, and artifact utilities
 
 domain/
   source contracts and typed models
@@ -127,34 +127,34 @@ Important behavior:
 ### Bronze
 
 ```bash
-python main.py l2-bronze-builder --symbols BTC ETH SOL --save-parquet-lake
-python main.py options-bronze-builder --symbols BTC ETH SOL --save-parquet-lake
-python main.py instrument-metadata-bronze-builder --symbols BTC ETH SOL --kind option
-python main.py index-price-bronze-builder --symbols btc_usd eth_usd sol_usdc
+python main.py l2-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
+python main.py options-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
+python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind option
+python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
 ```
 
 ### Silver
 
 ```bash
-python main.py l2-silver-builder
-python main.py options-silver-builder
-python main.py instrument-metadata-silver-builder
-python main.py index-price-silver-builder
+python main.py l2-silver-builder --debug
+python main.py options-silver-builder --debug
+python main.py instrument-metadata-silver-builder --debug
+python main.py index-price-silver-builder --debug
 ```
 
 ### Gold
 
 ```bash
-python main.py l2-gold-builder --fill-missing-minutes --fill-policy kalman
-python main.py options-gold-builder --fill-missing-minutes --fill-policy kalman
-python main.py instrument-metadata-gold-builder
-python main.py index-price-gold-builder
+python main.py l2-gold-builder --debug --plot --fill-missing-minutes --fill-policy kalman
+python main.py options-gold-builder --debug --plot --fill-missing-minutes --fill-policy kalman
+python main.py instrument-metadata-gold-builder --debug --plot --fill-missing-minutes --fill-policy kalman
+python main.py index-price-gold-builder --debug --plot --fill-missing-minutes --fill-policy kalman
 ```
 
 ### Utility
 
 ```bash
-python main.py validate-symbols --symbols BTC ETH SOL
+python main.py validate-symbols --debug --symbols BTC ETH SOL
 ```
 
 ## 8. Dataset Specifications
@@ -208,6 +208,12 @@ lake/gold/
   dataset_type=index_price_m1_features/...
 ```
 
+Artifact behavior:
+- Silver L2 and options writers can emit monthly parquet plus optional `.json` manifests and `.png` profiles.
+- Gold L2 and options writers can emit parquet plus optional `.json` manifests and `.png` profiles.
+- Gold instrument-metadata and index-price writers emit `data.parquet` and, when `--plot` is enabled, `data.png`.
+- Gold readers ignore hidden writer scratch parquet paths such as `.staging-*.parquet`.
+
 Compatibility note:
 - Options Silver reads both:
   - `dataset_type=options_ticker_snapshot_1m` (current)
@@ -237,8 +243,14 @@ Gold L2 quality controls:
 
 ## 11. Observability and Logging
 
-- Log files are module-scoped in configured log directory.
+- Every CLI command accepts `--debug` to opt into DEBUG-level logging for that run.
+- Log files are module-scoped in the configured log directory.
 - Log directory derives from `logfile` parent; falls back to runtime `log_dir`.
+- Runtime logs use one formatter: `timestamp level module_scope logger message`.
+- Job lifecycle messages use a stable key-value envelope:
+  - `job_event command=<command> event=dispatch ...`
+  - `job_event command=<command> event=debug_config ...`
+  - `job_event command=<command> event=run_summary ...`
 - Rotation controls:
   - `runtime.log_rotation_days`
   - `runtime.log_backup_count`
@@ -265,11 +277,10 @@ Example production cron:
 ## 13. Quality Gates
 
 ```bash
-.venv/bin/python -m ruff check .
-.venv/bin/python -m ruff format --check .
-.venv/bin/python -m mypy .
-.venv/bin/python -m pyright
-.venv/bin/python -m pytest -q
+.venv/bin/ruff check .
+.venv/bin/ruff format --check .
+.venv/bin/pyright --level error
+.venv/bin/pytest -q
 ```
 
 Convenience target:
