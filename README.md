@@ -256,10 +256,10 @@ Example production cron:
 15 16 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py options-silver-builder --debug --no-plot --no-manifest
 15 19 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py instrument-metadata-silver-builder --debug
 15 20 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py index-price-silver-builder --debug
-15 17 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py l2-gold-builder --debug --no-plot --no-manifest --fill-missing-minutes --fill-policy kalman
-15 18 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py options-gold-builder --debug --no-plot --no-manifest --fill-missing-minutes --fill-policy kalman
-15 21 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py instrument-metadata-gold-builder --debug --no-plot --no-manifest --fill-missing-minutes --fill-policy kalman
-15 22 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py index-price-gold-builder --debug --no-plot --no-manifest --fill-missing-minutes --fill-policy kalman
+15 17 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py l2-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
+15 18 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py options-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
+15 21 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py instrument-metadata-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
+15 22 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py index-price-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
 ```
 
 ## 13. Quality Gates
