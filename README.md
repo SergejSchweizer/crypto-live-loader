@@ -248,18 +248,18 @@ Gold L2 quality controls:
 Example production cron:
 
 ```cron
-* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py l2-bronze-builder --symbols BTC ETH SOL
-* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-bronze-builder --symbols BTC ETH SOL
-* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py index-price-bronze-builder --symbols btc_usd eth_usd sol_usdc
-15 3 * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py instrument-metadata-bronze-builder --symbols BTC ETH SOL --kind option
-15 15 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py l2-silver-builder --no-plot --no-manifest
-15 16 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py options-silver-builder --no-plot --no-manifest
-15 19 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py instrument-metadata-silver-builder
-15 20 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py index-price-silver-builder
-15 17 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py l2-gold-builder --no-plot --no-manifest --fill-missing-minutes --fill-policy kalman
-15 18 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py options-gold-builder --no-plot --no-manifest --fill-missing-minutes --fill-policy kalman
-15 21 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py instrument-metadata-gold-builder --no-plot --no-manifest --fill-missing-minutes --fill-policy kalman
-15 22 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py index-price-gold-builder --no-plot --no-manifest --fill-missing-minutes --fill-policy kalman
+* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py l2-bronze-builder --debug --symbols BTC ETH SOL
+* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-bronze-builder --debug --symbols BTC ETH SOL
+* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
+15 3 * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind option
+15 15 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py l2-silver-builder --debug --no-plot --no-manifest
+15 16 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py options-silver-builder --debug --no-plot --no-manifest
+15 19 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py instrument-metadata-silver-builder --debug
+15 20 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py index-price-silver-builder --debug
+15 17 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py l2-gold-builder --debug --no-plot --no-manifest --fill-missing-minutes --fill-policy kalman
+15 18 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py options-gold-builder --debug --no-plot --no-manifest --fill-missing-minutes --fill-policy kalman
+15 21 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py instrument-metadata-gold-builder --debug --no-plot --no-manifest --fill-missing-minutes --fill-policy kalman
+15 22 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py index-price-gold-builder --debug --no-plot --no-manifest --fill-missing-minutes --fill-policy kalman
 ```
 
 ## 13. Quality Gates

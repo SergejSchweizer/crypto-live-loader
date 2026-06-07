@@ -69,6 +69,7 @@ def test_options_gold_builder_outputs_artifact_files(
             "kalman",
             "--no-plot",
             "--manifest",
+            "--debug",
         ],
     )
 

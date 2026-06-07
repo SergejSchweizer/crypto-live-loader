@@ -13,6 +13,12 @@ from ingestion.file_lock import locked_output_path
 SortColumns: TypeAlias = str | list[str]
 
 
+def is_committed_parquet_path(path: Path) -> bool:
+    """Return whether a parquet path is a committed artifact rather than writer scratch state."""
+
+    return path.suffix == ".parquet" and not any(part.startswith(".") for part in path.parts)
+
+
 def upsert_partition_parquet(
     *,
     file_path: Path,

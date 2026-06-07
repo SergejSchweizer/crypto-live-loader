@@ -10,6 +10,7 @@ import polars as pl
 
 from ingestion.options_gold import (
     option_gold_transform_state_path,
+    option_silver_parquet_files,
     option_surface_m1_from_silver,
     transform_option_silver_to_gold,
 )
@@ -128,3 +129,36 @@ def test_transform_option_silver_to_gold_writes_artifacts_and_state(tmp_path: Pa
     json_file = next(path for path in first_files if path.endswith("2026-05.json"))
     payload = json.loads(Path(json_file).read_text(encoding="utf-8"))
     assert payload["dataset_type"] == "option_surface_m1"
+
+
+def test_transform_option_silver_to_gold_ignores_hidden_staging_parquet(tmp_path: Path) -> None:
+    """Verify writer scratch files cannot poison Gold option input discovery."""
+
+    silver_root = tmp_path / "silver"
+    gold_root = tmp_path / "gold"
+    save_silver_option_chain_features(
+        silver=_sample_silver_options_frame(),
+        lake_root=str(silver_root),
+        plot=False,
+        manifest=False,
+    )
+    staging_path = (
+        silver_root
+        / "dataset_type=option_chain_features_1m"
+        / "exchange=deribit"
+        / "instrument_type=option"
+        / "currency=BTC"
+        / "month=2026-05"
+        / ".staging-corrupt.parquet"
+    )
+    staging_path.write_bytes(b"not a parquet file")
+
+    assert staging_path not in option_silver_parquet_files(str(silver_root))
+    files = transform_option_silver_to_gold(
+        silver_lake_root=str(silver_root),
+        gold_lake_root=str(gold_root),
+        plot=False,
+        manifest=False,
+    )
+
+    assert any(file_path.endswith("2026-05.parquet") for file_path in files)

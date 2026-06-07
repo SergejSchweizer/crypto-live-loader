@@ -8,7 +8,7 @@ import polars as pl
 
 from ingestion.artifact_state import file_fingerprints, load_json_state, write_json_state
 from ingestion.incremental import inputs_unchanged
-from ingestion.polars_parquet_store import upsert_partition_parquet
+from ingestion.polars_parquet_store import is_committed_parquet_path, upsert_partition_parquet
 
 INDEX_PRICE_GOLD_DATASET_TYPE = "index_price_m1_features"
 INDEX_PRICE_GOLD_SCHEMA_VERSION = "v1"
@@ -29,7 +29,11 @@ def transform_index_price_silver_to_gold(
     if fill_policy not in {"neighbor", "hybrid", "kalman"}:
         raise ValueError(f"Unsupported fill policy '{fill_policy}'")
 
-    silver_files = sorted(Path(silver_lake_root).glob("dataset_type=index_price_snapshot_features_1m/**/*.parquet"))
+    silver_files = sorted(
+        path
+        for path in Path(silver_lake_root).glob("dataset_type=index_price_snapshot_features_1m/**/*.parquet")
+        if is_committed_parquet_path(path)
+    )
     if not silver_files:
         return []
 

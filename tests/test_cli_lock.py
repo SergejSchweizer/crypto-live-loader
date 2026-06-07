@@ -14,8 +14,17 @@ from api import cli
 from api.constants import (
     BRONZE_BUILDER_COMMAND,
     GOLD_BUILDER_COMMAND,
+    INDEX_PRICE_BRONZE_BUILDER_COMMAND,
+    INDEX_PRICE_GOLD_BUILDER_COMMAND,
+    INDEX_PRICE_SILVER_BUILDER_COMMAND,
+    INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
+    INSTRUMENT_METADATA_GOLD_BUILDER_COMMAND,
+    INSTRUMENT_METADATA_SILVER_BUILDER_COMMAND,
     LEGACY_GOLD_BUILDER_COMMAND,
     LEGACY_SILVER_BUILDER_COMMAND,
+    OPTIONS_BRONZE_BUILDER_COMMAND,
+    OPTIONS_GOLD_BUILDER_COMMAND,
+    OPTIONS_SILVER_BUILDER_COMMAND,
     SILVER_BUILDER_COMMAND,
 )
 from api.runtime import configure_logging
@@ -149,6 +158,36 @@ def test_l2_parser_defaults_to_five_snapshots_per_run() -> None:
     assert args.snapshot_count == 5
     assert args.poll_interval_s == 10.0
     assert args.max_runtime_s == 50.0
+
+
+def test_cron_layer_commands_accept_debug_flag() -> None:
+    """Verify every scheduled Bronze, Silver, and Gold command accepts --debug."""
+
+    parser = cli.build_parser(_config())
+    commands = [
+        [BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL"],
+        [OPTIONS_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL"],
+        [INDEX_PRICE_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "btc_usd", "eth_usd", "sol_usdc"],
+        [INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL", "--kind", "option"],
+        [SILVER_BUILDER_COMMAND, "--debug", "--no-plot", "--no-manifest"],
+        [OPTIONS_SILVER_BUILDER_COMMAND, "--debug", "--no-plot", "--no-manifest"],
+        [INSTRUMENT_METADATA_SILVER_BUILDER_COMMAND, "--debug"],
+        [INDEX_PRICE_SILVER_BUILDER_COMMAND, "--debug"],
+        [GOLD_BUILDER_COMMAND, "--debug", "--no-plot", "--no-manifest", "--fill-missing-minutes"],
+        [OPTIONS_GOLD_BUILDER_COMMAND, "--debug", "--no-plot", "--no-manifest", "--fill-missing-minutes"],
+        [
+            INSTRUMENT_METADATA_GOLD_BUILDER_COMMAND,
+            "--debug",
+            "--no-plot",
+            "--no-manifest",
+            "--fill-missing-minutes",
+        ],
+        [INDEX_PRICE_GOLD_BUILDER_COMMAND, "--debug", "--no-plot", "--no-manifest", "--fill-missing-minutes"],
+    ]
+
+    parsed = [parser.parse_args(command) for command in commands]
+
+    assert all(bool(args.debug) for args in parsed)
 
 
 def test_l2_parser_cli_can_override_boolean_config_defaults() -> None:
@@ -679,5 +718,50 @@ def test_main_gold_builder_passes_kalman_fill_policy(
             "manifest": True,
             "fill_missing_minutes": True,
             "fill_policy": "kalman",
+        }
+    ]
+
+
+def test_main_gold_builder_debug_enables_debug_logging(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Verify l2-gold-builder accepts --debug without changing transform contracts."""
+
+    calls: list[dict[str, object]] = []
+
+    def fake_transform_l2_silver_to_gold(**kwargs: object) -> list[str]:
+        calls.append(kwargs)
+        return []
+
+    monkeypatch.setattr(cli, "transform_l2_silver_to_gold", fake_transform_l2_silver_to_gold)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "main.py",
+            GOLD_BUILDER_COMMAND,
+            "--silver-lake-root",
+            "custom/silver",
+            "--gold-lake-root",
+            "custom/gold",
+            "--debug",
+        ],
+    )
+
+    cli.main()
+    _ = capsys.readouterr()
+
+    logger = logging.getLogger("crypto_live_loader.l2-gold-builder")
+    assert logger.level == logging.DEBUG
+    assert calls == [
+        {
+            "silver_lake_root": "custom/silver",
+            "gold_lake_root": "custom/gold",
+            "expected_snapshots_per_minute": 6,
+            "completeness_threshold": 0.8,
+            "plot": True,
+            "manifest": True,
+            "fill_missing_minutes": False,
+            "fill_policy": "neighbor",
         }
     ]

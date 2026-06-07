@@ -15,6 +15,7 @@ import polars as pl
 
 from ingestion.artifact_state import file_fingerprints, load_json_state, write_json_state
 from ingestion.file_lock import locked_output_path
+from ingestion.polars_parquet_store import is_committed_parquet_path
 
 GOLD_FEATURE_SET_VERSION = "gold_l2_m1_v1"
 GOLD_L2_M1_DATASET_TYPE = "l2_m1_features"
@@ -262,7 +263,11 @@ def transform_l2_silver_to_gold(
 def silver_parquet_files(silver_lake_root: str) -> list[Path]:
     """Return silver parquet files, preferring month-named files over legacy data.parquet files."""
 
-    all_files = sorted(Path(silver_lake_root).glob("dataset_type=l2_snapshot_features/**/*.parquet"))
+    all_files = sorted(
+        path
+        for path in Path(silver_lake_root).glob("dataset_type=l2_snapshot_features/**/*.parquet")
+        if is_committed_parquet_path(path)
+    )
     month_named_dirs = {path.parent for path in all_files if path.name != "data.parquet"}
     return [path for path in all_files if path.name != "data.parquet" or path.parent not in month_named_dirs]
 

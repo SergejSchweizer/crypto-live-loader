@@ -8,7 +8,7 @@ import polars as pl
 
 from ingestion.artifact_state import file_fingerprints, load_json_state, write_json_state
 from ingestion.incremental import inputs_unchanged
-from ingestion.polars_parquet_store import upsert_partition_parquet
+from ingestion.polars_parquet_store import is_committed_parquet_path, upsert_partition_parquet
 
 INSTRUMENT_METADATA_GOLD_DATASET_TYPE = "instrument_metadata_daily_summary"
 INSTRUMENT_METADATA_GOLD_SCHEMA_VERSION = "v1"
@@ -30,7 +30,9 @@ def transform_instrument_metadata_silver_to_gold(
         raise ValueError(f"Unsupported fill policy '{fill_policy}'")
 
     silver_files = sorted(
-        Path(silver_lake_root).glob("dataset_type=instrument_metadata_snapshot_features_daily/**/*.parquet")
+        path
+        for path in Path(silver_lake_root).glob("dataset_type=instrument_metadata_snapshot_features_daily/**/*.parquet")
+        if is_committed_parquet_path(path)
     )
     if not silver_files:
         return []
