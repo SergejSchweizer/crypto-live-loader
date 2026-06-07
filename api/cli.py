@@ -748,6 +748,34 @@ def _emit_json_output(enabled: bool, payload: Mapping[str, object]) -> None:
         print(json.dumps(payload, indent=2))
 
 
+def _log_value(value: object) -> str:
+    if value is None:
+        return "none"
+    if isinstance(value, bool):
+        return str(value).lower()
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    if isinstance(value, Mapping):
+        return ",".join(f"{key}:{_log_value(item)}" for key, item in sorted(value.items()))
+    if isinstance(value, list | tuple | set):
+        return ",".join(str(item) for item in value)
+    return str(value)
+
+
+def _format_log_fields(fields: Mapping[str, object]) -> str:
+    return " ".join(f"{key}={_log_value(value)}" for key, value in sorted(fields.items()))
+
+
+def _log_job_event(
+    logger: logging.Logger,
+    level: int,
+    command: str,
+    event: str,
+    **fields: object,
+) -> None:
+    logger.log(level, "job_event command=%s event=%s %s", command, event, _format_log_fields(fields))
+
+
 async def _fetch_options_rows_for_currencies(
     currencies: list[str],
     concurrency: int,
@@ -790,17 +818,20 @@ def _log_bronze_builder_summary(
     status = "partial" if collected_total < requested_total else "complete"
     if parquet_error is not None:
         status = "parquet_error"
-    logger.info(
-        "bronze-builder run summary exchange=%s symbols=%s status=%s elapsed_s=%.3f snapshots_collected=%s "
-        "snapshots_requested=%s parquet_files=%s parquet_error=%s",
-        exchange,
-        ",".join(symbol.upper() for symbol in symbols),
-        status,
-        elapsed_s,
-        collected_total,
-        requested_total,
-        len(parquet_files),
-        parquet_error or "none",
+    _log_job_event(
+        logger,
+        logging.INFO,
+        BRONZE_BUILDER_COMMAND,
+        "run_summary",
+        elapsed_s=elapsed_s,
+        errors=1 if parquet_error is not None else 0,
+        exchange=exchange,
+        parquet_error=parquet_error,
+        parquet_files=len(parquet_files),
+        snapshots_collected=collected_total,
+        snapshots_requested=requested_total,
+        status=status,
+        symbols=[symbol.upper() for symbol in symbols],
     )
 
 
@@ -826,12 +857,15 @@ def _build_snapshot_output(
             requested_snapshots=requested_snapshots,
         )
         exchange_output[symbol_key] = [_serialize_l2_snapshot(item) for item in snapshots]
-        logger.info(
-            "bronze-builder snapshot stats exchange=%s symbol=%s snapshots_collected=%s snapshots_requested=%s",
-            exchange,
-            symbol_key,
-            len(snapshots),
-            requested_snapshots,
+        _log_job_event(
+            logger,
+            logging.INFO,
+            BRONZE_BUILDER_COMMAND,
+            "snapshot_stats",
+            exchange=exchange,
+            snapshots_collected=len(snapshots),
+            snapshots_requested=requested_snapshots,
+            symbol=symbol_key,
         )
 
     return output
@@ -1034,16 +1068,19 @@ def _run_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger
     }
     _emit_json_output(bool(args.json_output), output)
     errors = cast(list[str], output["errors"])
-    logger.info(
-        "options-bronze-builder run summary run_id=%s snapshot_time=%s currencies=%s rows_written=%s files=%s "
-        "errors=%s elapsed_s=%.3f",
-        run_id,
-        output["snapshot_time"],
-        ",".join(currencies),
-        output["rows_written"],
-        len(output_files),
-        len(errors),
-        perf_counter() - started_at,
+    _log_job_event(
+        logger,
+        logging.INFO,
+        OPTIONS_BRONZE_BUILDER_COMMAND,
+        "run_summary",
+        currencies=currencies,
+        elapsed_s=perf_counter() - started_at,
+        errors=len(errors),
+        files=len(output_files),
+        rows_written=output["rows_written"],
+        run_id=run_id,
+        snapshot_time=output["snapshot_time"],
+        status="complete" if not errors else "partial",
     )
 
 
@@ -1096,17 +1133,21 @@ def _run_instrument_metadata_bronze_builder(args: argparse.Namespace, logger: lo
         "errors": fetch_errors + normalize_errors,
     }
     _emit_json_output(bool(args.json_output), output)
-    logger.info(
-        "instrument-metadata-bronze-builder run summary run_id=%s snapshot_date=%s currencies=%s kind=%s rows=%s "
-        "files=%s errors=%s elapsed_s=%.3f",
-        run_id,
-        snapshot_date.isoformat(),
-        ",".join(currencies),
-        kind,
-        len(rows),
-        len(output_files),
-        len(fetch_errors) + len(normalize_errors),
-        perf_counter() - started_at,
+    error_count = len(fetch_errors) + len(normalize_errors)
+    _log_job_event(
+        logger,
+        logging.INFO,
+        INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
+        "run_summary",
+        currencies=currencies,
+        elapsed_s=perf_counter() - started_at,
+        errors=error_count,
+        files=len(output_files),
+        kind=kind,
+        rows_written=len(rows),
+        run_id=run_id,
+        snapshot_date=snapshot_date.isoformat(),
+        status="complete" if error_count == 0 else "partial",
     )
 
 
@@ -1157,16 +1198,19 @@ def _run_index_price_bronze_builder(args: argparse.Namespace, logger: logging.Lo
         "errors": errors,
     }
     _emit_json_output(bool(args.json_output), output)
-    logger.info(
-        "index-price-bronze-builder run summary run_id=%s snapshot_time=%s symbols=%s rows=%s files=%s errors=%s "
-        "elapsed_s=%.3f",
-        run_id,
-        output["snapshot_time"],
-        ",".join(symbols),
-        output["rows_written"],
-        len(output_files),
-        len(errors),
-        perf_counter() - started_at,
+    _log_job_event(
+        logger,
+        logging.INFO,
+        INDEX_PRICE_BRONZE_BUILDER_COMMAND,
+        "run_summary",
+        elapsed_s=perf_counter() - started_at,
+        errors=len(errors),
+        files=len(output_files),
+        rows_written=output["rows_written"],
+        run_id=run_id,
+        snapshot_time=output["snapshot_time"],
+        status="complete" if not errors else "partial",
+        symbols=symbols,
     )
 
 
@@ -1188,13 +1232,16 @@ def _run_instrument_metadata_silver_builder(args: argparse.Namespace, logger: lo
         "artifact_files": written_files,
     }
     _emit_json_output(bool(args.json_output), output)
-    logger.info(
-        "instrument-metadata-silver-builder run summary status=complete elapsed_s=%.3f bronze_lake_root=%s "
-        "silver_lake_root=%s artifact_files=%s",
-        perf_counter() - started_at,
-        bronze_lake_root,
-        silver_lake_root,
-        len(written_files),
+    _log_job_event(
+        logger,
+        logging.INFO,
+        INSTRUMENT_METADATA_SILVER_BUILDER_COMMAND,
+        "run_summary",
+        artifact_files=len(written_files),
+        bronze_lake_root=bronze_lake_root,
+        elapsed_s=perf_counter() - started_at,
+        silver_lake_root=silver_lake_root,
+        status="complete",
     )
 
 
@@ -1216,13 +1263,16 @@ def _run_index_price_silver_builder(args: argparse.Namespace, logger: logging.Lo
         "artifact_files": written_files,
     }
     _emit_json_output(bool(args.json_output), output)
-    logger.info(
-        "index-price-silver-builder run summary status=complete elapsed_s=%.3f bronze_lake_root=%s "
-        "silver_lake_root=%s artifact_files=%s",
-        perf_counter() - started_at,
-        bronze_lake_root,
-        silver_lake_root,
-        len(written_files),
+    _log_job_event(
+        logger,
+        logging.INFO,
+        INDEX_PRICE_SILVER_BUILDER_COMMAND,
+        "run_summary",
+        artifact_files=len(written_files),
+        bronze_lake_root=bronze_lake_root,
+        elapsed_s=perf_counter() - started_at,
+        silver_lake_root=silver_lake_root,
+        status="complete",
     )
 
 
@@ -1233,16 +1283,18 @@ def _run_instrument_metadata_gold_builder(args: argparse.Namespace, logger: logg
     started_at = perf_counter()
     silver_lake_root = cast(str, args.silver_lake_root)
     gold_lake_root = cast(str, args.gold_lake_root)
-    logger.debug(
-        "instrument-metadata-gold-builder debug configuration silver_lake_root=%s gold_lake_root=%s "
-        "plot=%s manifest=%s fill_missing_minutes=%s fill_policy=%s json_output=%s",
-        silver_lake_root,
-        gold_lake_root,
-        bool(args.plot),
-        bool(args.manifest),
-        bool(args.fill_missing_minutes),
-        cast(str, args.fill_policy),
-        bool(args.json_output),
+    _log_job_event(
+        logger,
+        logging.DEBUG,
+        INSTRUMENT_METADATA_GOLD_BUILDER_COMMAND,
+        "debug_config",
+        fill_missing_minutes=bool(args.fill_missing_minutes),
+        fill_policy=cast(str, args.fill_policy),
+        gold_lake_root=gold_lake_root,
+        json_output=bool(args.json_output),
+        manifest=bool(args.manifest),
+        plot=bool(args.plot),
+        silver_lake_root=silver_lake_root,
     )
     written_files = transform_instrument_metadata_silver_to_gold(
         silver_lake_root=silver_lake_root,
@@ -1262,15 +1314,18 @@ def _run_instrument_metadata_gold_builder(args: argparse.Namespace, logger: logg
         "artifact_files": written_files,
     }
     _emit_json_output(bool(args.json_output), output)
-    logger.info(
-        "instrument-metadata-gold-builder run summary status=complete elapsed_s=%.3f silver_lake_root=%s "
-        "gold_lake_root=%s fill_missing_minutes=%s fill_policy=%s artifact_files=%s",
-        perf_counter() - started_at,
-        silver_lake_root,
-        gold_lake_root,
-        bool(args.fill_missing_minutes),
-        cast(str, args.fill_policy),
-        len(written_files),
+    _log_job_event(
+        logger,
+        logging.INFO,
+        INSTRUMENT_METADATA_GOLD_BUILDER_COMMAND,
+        "run_summary",
+        artifact_files=len(written_files),
+        elapsed_s=perf_counter() - started_at,
+        fill_missing_minutes=bool(args.fill_missing_minutes),
+        fill_policy=cast(str, args.fill_policy),
+        gold_lake_root=gold_lake_root,
+        silver_lake_root=silver_lake_root,
+        status="complete",
     )
 
 
@@ -1281,16 +1336,18 @@ def _run_index_price_gold_builder(args: argparse.Namespace, logger: logging.Logg
     started_at = perf_counter()
     silver_lake_root = cast(str, args.silver_lake_root)
     gold_lake_root = cast(str, args.gold_lake_root)
-    logger.debug(
-        "index-price-gold-builder debug configuration silver_lake_root=%s gold_lake_root=%s plot=%s "
-        "manifest=%s fill_missing_minutes=%s fill_policy=%s json_output=%s",
-        silver_lake_root,
-        gold_lake_root,
-        bool(args.plot),
-        bool(args.manifest),
-        bool(args.fill_missing_minutes),
-        cast(str, args.fill_policy),
-        bool(args.json_output),
+    _log_job_event(
+        logger,
+        logging.DEBUG,
+        INDEX_PRICE_GOLD_BUILDER_COMMAND,
+        "debug_config",
+        fill_missing_minutes=bool(args.fill_missing_minutes),
+        fill_policy=cast(str, args.fill_policy),
+        gold_lake_root=gold_lake_root,
+        json_output=bool(args.json_output),
+        manifest=bool(args.manifest),
+        plot=bool(args.plot),
+        silver_lake_root=silver_lake_root,
     )
     written_files = transform_index_price_silver_to_gold(
         silver_lake_root=silver_lake_root,
@@ -1310,15 +1367,18 @@ def _run_index_price_gold_builder(args: argparse.Namespace, logger: logging.Logg
         "artifact_files": written_files,
     }
     _emit_json_output(bool(args.json_output), output)
-    logger.info(
-        "index-price-gold-builder run summary status=complete elapsed_s=%.3f silver_lake_root=%s "
-        "gold_lake_root=%s fill_missing_minutes=%s fill_policy=%s artifact_files=%s",
-        perf_counter() - started_at,
-        silver_lake_root,
-        gold_lake_root,
-        bool(args.fill_missing_minutes),
-        cast(str, args.fill_policy),
-        len(written_files),
+    _log_job_event(
+        logger,
+        logging.INFO,
+        INDEX_PRICE_GOLD_BUILDER_COMMAND,
+        "run_summary",
+        artifact_files=len(written_files),
+        elapsed_s=perf_counter() - started_at,
+        fill_missing_minutes=bool(args.fill_missing_minutes),
+        fill_policy=cast(str, args.fill_policy),
+        gold_lake_root=gold_lake_root,
+        silver_lake_root=silver_lake_root,
+        status="complete",
     )
 
 
@@ -1343,13 +1403,16 @@ def _run_options_silver_builder(args: argparse.Namespace, logger: logging.Logger
         "artifact_files": written_files,
     }
     _emit_json_output(bool(args.json_output), output)
-    logger.info(
-        "options-silver-builder run summary status=complete elapsed_s=%.3f bronze_lake_root=%s "
-        "silver_lake_root=%s artifact_files=%s",
-        elapsed_s,
-        bronze_lake_root,
-        silver_lake_root,
-        len(written_files),
+    _log_job_event(
+        logger,
+        logging.INFO,
+        OPTIONS_SILVER_BUILDER_COMMAND,
+        "run_summary",
+        artifact_files=len(written_files),
+        bronze_lake_root=bronze_lake_root,
+        elapsed_s=elapsed_s,
+        silver_lake_root=silver_lake_root,
+        status="complete",
     )
 
 
@@ -1377,14 +1440,17 @@ def _run_silver_builder(args: argparse.Namespace, logger: logging.Logger) -> Non
         "artifact_files": written_files,
     }
     _emit_json_output(bool(args.json_output), output)
-    logger.info(
-        "l2-silver-builder run summary status=complete elapsed_s=%.3f bronze_lake_root=%s "
-        "silver_lake_root=%s depth=%s artifact_files=%s",
-        elapsed_s,
-        bronze_lake_root,
-        silver_lake_root,
-        depth,
-        len(written_files),
+    _log_job_event(
+        logger,
+        logging.INFO,
+        SILVER_BUILDER_COMMAND,
+        "run_summary",
+        artifact_files=len(written_files),
+        bronze_lake_root=bronze_lake_root,
+        depth=depth,
+        elapsed_s=elapsed_s,
+        silver_lake_root=silver_lake_root,
+        status="complete",
     )
 
 
@@ -1395,16 +1461,18 @@ def _run_options_gold_builder(args: argparse.Namespace, logger: logging.Logger) 
     started_at = perf_counter()
     silver_lake_root = cast(str, args.silver_lake_root)
     gold_lake_root = cast(str, args.gold_lake_root)
-    logger.debug(
-        "options-gold-builder debug configuration silver_lake_root=%s gold_lake_root=%s plot=%s manifest=%s "
-        "fill_missing_minutes=%s fill_policy=%s json_output=%s",
-        silver_lake_root,
-        gold_lake_root,
-        bool(args.plot),
-        bool(args.manifest),
-        bool(args.fill_missing_minutes),
-        cast(str, args.fill_policy),
-        bool(args.json_output),
+    _log_job_event(
+        logger,
+        logging.DEBUG,
+        OPTIONS_GOLD_BUILDER_COMMAND,
+        "debug_config",
+        fill_missing_minutes=bool(args.fill_missing_minutes),
+        fill_policy=cast(str, args.fill_policy),
+        gold_lake_root=gold_lake_root,
+        json_output=bool(args.json_output),
+        manifest=bool(args.manifest),
+        plot=bool(args.plot),
+        silver_lake_root=silver_lake_root,
     )
     written_files = transform_option_silver_to_gold(
         silver_lake_root=silver_lake_root,
@@ -1425,15 +1493,18 @@ def _run_options_gold_builder(args: argparse.Namespace, logger: logging.Logger) 
         "artifact_files": written_files,
     }
     _emit_json_output(bool(args.json_output), output)
-    logger.info(
-        "options-gold-builder run summary status=complete elapsed_s=%.3f silver_lake_root=%s "
-        "gold_lake_root=%s fill_missing_minutes=%s fill_policy=%s artifact_files=%s",
-        elapsed_s,
-        silver_lake_root,
-        gold_lake_root,
-        bool(args.fill_missing_minutes),
-        cast(str, args.fill_policy),
-        len(written_files),
+    _log_job_event(
+        logger,
+        logging.INFO,
+        OPTIONS_GOLD_BUILDER_COMMAND,
+        "run_summary",
+        artifact_files=len(written_files),
+        elapsed_s=elapsed_s,
+        fill_missing_minutes=bool(args.fill_missing_minutes),
+        fill_policy=cast(str, args.fill_policy),
+        gold_lake_root=gold_lake_root,
+        silver_lake_root=silver_lake_root,
+        status="complete",
     )
 
 
@@ -1446,19 +1517,20 @@ def _run_gold_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
     gold_lake_root = cast(str, args.gold_lake_root)
     expected_snapshots_per_minute = int(args.expected_snapshots_per_minute)
     completeness_threshold = float(args.completeness_threshold)
-    logger.debug(
-        "l2-gold-builder debug configuration silver_lake_root=%s gold_lake_root=%s "
-        "expected_snapshots_per_minute=%s completeness_threshold=%.3f plot=%s manifest=%s "
-        "fill_missing_minutes=%s fill_policy=%s json_output=%s",
-        silver_lake_root,
-        gold_lake_root,
-        expected_snapshots_per_minute,
-        completeness_threshold,
-        bool(args.plot),
-        bool(args.manifest),
-        bool(args.fill_missing_minutes),
-        cast(str, args.fill_policy),
-        bool(args.json_output),
+    _log_job_event(
+        logger,
+        logging.DEBUG,
+        GOLD_BUILDER_COMMAND,
+        "debug_config",
+        completeness_threshold=completeness_threshold,
+        expected_snapshots_per_minute=expected_snapshots_per_minute,
+        fill_missing_minutes=bool(args.fill_missing_minutes),
+        fill_policy=cast(str, args.fill_policy),
+        gold_lake_root=gold_lake_root,
+        json_output=bool(args.json_output),
+        manifest=bool(args.manifest),
+        plot=bool(args.plot),
+        silver_lake_root=silver_lake_root,
     )
     written_files = transform_l2_silver_to_gold(
         silver_lake_root=silver_lake_root,
@@ -1483,18 +1555,20 @@ def _run_gold_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
         "artifact_files": written_files,
     }
     _emit_json_output(bool(args.json_output), output)
-    logger.info(
-        "l2-gold-builder run summary status=complete elapsed_s=%.3f silver_lake_root=%s "
-        "gold_lake_root=%s expected_snapshots_per_minute=%s completeness_threshold=%.3f "
-        "fill_missing_minutes=%s fill_policy=%s artifact_files=%s",
-        elapsed_s,
-        silver_lake_root,
-        gold_lake_root,
-        expected_snapshots_per_minute,
-        completeness_threshold,
-        bool(args.fill_missing_minutes),
-        cast(str, args.fill_policy),
-        len(written_files),
+    _log_job_event(
+        logger,
+        logging.INFO,
+        GOLD_BUILDER_COMMAND,
+        "run_summary",
+        artifact_files=len(written_files),
+        completeness_threshold=completeness_threshold,
+        elapsed_s=elapsed_s,
+        expected_snapshots_per_minute=expected_snapshots_per_minute,
+        fill_missing_minutes=bool(args.fill_missing_minutes),
+        fill_policy=cast(str, args.fill_policy),
+        gold_lake_root=gold_lake_root,
+        silver_lake_root=silver_lake_root,
+        status="complete",
     )
 
 
@@ -1551,11 +1625,15 @@ def _run_validate_symbols(args: argparse.Namespace, logger: logging.Logger) -> N
         "all_valid": all(bool(item["valid_book"]) for item in results),
     }
     _emit_json_output(bool(args.json_output), output)
-    logger.info(
-        "Symbol validation complete exchange=%s symbols=%s all_valid=%s",
-        args.exchange,
-        ",".join(symbols),
-        output["all_valid"],
+    _log_job_event(
+        logger,
+        logging.INFO,
+        VALIDATE_SYMBOLS_COMMAND,
+        "run_summary",
+        all_valid=output["all_valid"],
+        exchange=args.exchange,
+        status="complete",
+        symbols=symbols,
     )
 
 
@@ -1654,10 +1732,12 @@ def dispatch_command(args: argparse.Namespace, logger: logging.Logger, config: C
     _enable_debug_logging(args=args, logger=logger)
     handlers = command_handlers()
     command = cast(str, args.command)
-    logger.debug(
-        "cli dispatch debug command=%s args=%s",
+    _log_job_event(
+        logger,
+        logging.DEBUG,
         command,
-        {key: value for key, value in sorted(vars(args).items()) if key != "command"},
+        "dispatch",
+        args={key: value for key, value in sorted(vars(args).items()) if key != "command"},
     )
     handler = handlers.get(command)
     if handler is None:

@@ -8,6 +8,7 @@ import polars as pl
 
 from ingestion.artifact_state import file_fingerprints, load_json_state, write_json_state
 from ingestion.incremental import inputs_unchanged
+from ingestion.plotting import write_compact_feature_profile_png
 from ingestion.polars_parquet_store import is_committed_parquet_path, upsert_partition_parquet
 
 INDEX_PRICE_GOLD_DATASET_TYPE = "index_price_m1_features"
@@ -136,27 +137,10 @@ def _write_gold_index_price(gold: pl.DataFrame, lake_root: str, plot: bool = Tru
 def _write_gold_index_price_plot(gold: pl.DataFrame, path: Path) -> None:
     """Write a compact PNG profile for one Gold index-price partition."""
 
-    import matplotlib
-
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    columns = ["price_close", "price_mean", "log_return_1m_mean", "snapshot_count"]
-    present = [column for column in columns if column in gold.columns]
-    if not present:
-        path.touch()
-        return
-
-    fig, axes = plt.subplots(len(present), 1, figsize=(12, max(4, len(present) * 1.8)), squeeze=False)
-    fig.patch.set_facecolor("#111217")
-    ts_values = gold["ts_minute"].to_list()
-    for index, column in enumerate(present):
-        axis = axes[index][0]
-        axis.set_facecolor("#161922")
-        axis.plot(ts_values, gold[column].to_list(), color="#88c0d0", linewidth=0.9)
-        axis.set_title(column, color="#eceff4", fontsize=9, loc="left")
-        axis.tick_params(colors="#d8dee9", labelsize=7)
-    fig.tight_layout()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path, dpi=120, facecolor=fig.get_facecolor())
-    plt.close(fig)
+    write_compact_feature_profile_png(
+        frame=gold,
+        path=path,
+        x_column="ts_minute",
+        y_columns=["price_close", "price_mean", "log_return_1m_mean", "snapshot_count"],
+        color="#88c0d0",
+    )
