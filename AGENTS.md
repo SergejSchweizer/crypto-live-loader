@@ -52,11 +52,14 @@ Always active across all modules and workflows.
 - [MUST] Isolate side effects behind explicit interfaces and adapters.
 - [MUST] Keep execution deterministic where feasible.
 - [MUST] Keep operational docs aligned with behavior changes.
-- [MUST] Use one shared logfile path defined in `config.yaml`.
-- [MUST] Use one consistent log structure across modules.
+- [MUST] Use one shared log root path defined in `config.yaml`, and it must point to the `.logs` directory.
+- [MUST] Every module writes to its own logfile under the shared `.logs` directory.
+- [MUST] Use one consistent log message structure across all modules.
 - [MUST] Do not comment obvious code.
 - [SHOULD] Add comments for non-obvious decisions, invariants, and tradeoffs.
 - [MUST] Comments and docstrings explain non-obvious decisions, invariants, edge cases, tradeoffs, external system assumptions, and failure handling.
+- [MUST] Add inline comments for important non-obvious data logic, including forward-fill, interpolation, resampling, timestamp normalization, timezone handling, rolling windows, and numerical stability safeguards.
+- [MUST] For market-data and derivatives workflows, inline comments must document funding normalization, open-interest reconstruction, option-surface reconstruction, feature engineering decisions, leakage prevention, and exchange-specific behavior.
 - [SHOULD] Avoid comments that only restate obvious code.
 - [MUST] Enforce deny-by-default `.gitignore` patterns, with minimal explicit allowlist.
 
@@ -74,7 +77,7 @@ Always active across all modules and workflows.
 
 ## Verification Commands
 
-- `rg -n "logfile|logging|config.yaml" .`
+- `rg -n "logfile|logging|config.yaml|\\.logs" .`
 - `ruff check .`
 - `pytest -q`
 
@@ -152,7 +155,11 @@ Applies to review readiness, PR preparation, and pre-merge quality-gate validati
 - [SHOULD] Require docstrings for non-trivial modules and functions.
 - [MUST] Run lint, format, typing, tests, and coverage checks before merge when practical.
 - [MUST] Required quality-gate checks include Ruff linting, Ruff formatting check, Pyright strict type checking, Pytest, coverage threshold, docstring checks, import boundary checks, and architecture tests.
+- [MUST] Required documentation checks include `interrogate` docstring coverage and `pydoclint` signature-docstring consistency validation.
+- [MUST] Run quality tools in strict mode where available, and fail the build on any reported error.
+- [MUST] Do not use permissive flags or downgraded severity levels that hide lint, type, formatting, or test failures.
 - [MUST] Agents must not bypass checks with `--no-verify` unless explicitly instructed by the human maintainer.
+- [MUST] `.pre-commit-config.yaml` includes and maintains hooks for `ruff`, `interrogate`, `pydoclint`, `pyright`, and `pytest`.
 
 ## Review Findings Format
 
@@ -186,6 +193,8 @@ Applies to review readiness, PR preparation, and pre-merge quality-gate validati
 
 - `ruff check .`
 - `ruff format --check .`
+- `interrogate .`
+- `pydoclint src`
 - `pyright --level error`
 - `pytest -q`
 
@@ -203,6 +212,7 @@ Applies when adding or changing tests, fixing bugs, refactoring behavior, adding
 - [MUST] Add regression tests for every bug fix.
 - [MUST] Test happy path, edge cases, and failure paths.
 - [MUST] Keep tests deterministic.
+- [MUST] Run `coverage run -m pytest` and `coverage report` for release-ready validation when practical.
 
 ## Coverage Policy
 
@@ -226,6 +236,7 @@ Applies when adding or changing tests, fixing bugs, refactoring behavior, adding
 - Analyze logfile output while process runs.
 - Add or refine logs only where they improve failure isolation.
 - Add or adjust tests before finalizing the fix.
+- Run the documented pre-commit command sequence before finalizing: Ruff, `interrogate`, `pydoclint`, type checks, tests, and coverage.
 
 ## Definition of Done
 
@@ -238,6 +249,8 @@ Applies when adding or changing tests, fixing bugs, refactoring behavior, adding
 - `pytest -q`
 - `pytest --maxfail=1 -q`
 - `pytest --cov --cov-report=term-missing`
+- `coverage run -m pytest`
+- `coverage report`
 
 ## Exceptions and Escalation
 
@@ -262,14 +275,27 @@ Applies to Python quality tooling, typing, formatting, and local validation comm
 - [SHOULD] Configure `ruff`, `pyright`, `pytest`, `coverage`, and docstring tooling via `pyproject.toml` when supported.
 - [SHOULD] Avoid scattered configuration files unless a tool does not support `pyproject.toml`.
 - [MUST] Keep code compatible with the configured formatter, linter, type checker, and test runner.
+- [MUST] Pyright and other configured Python quality tools must run in strict mode where supported.
+- [MUST] Do not relax tool strictness or suppress failures globally to make checks pass.
 - [MUST] Use type hints consistently, including explicit return types for public interfaces.
 - [MUST] Public modules, public classes, public functions, CLIs, and architectural boundaries have concise docstrings.
+- [MUST] Every public function, class, and method uses Google-style docstrings.
+- [MUST] Function docstrings document: what and why, parameters, returns, raised exceptions, assumptions, side effects, and data semantics.
+- [MUST] When applicable, function docstrings also document time-alignment assumptions and exchange-specific quirks.
+- [MUST] Enforce docstring coverage with `interrogate`.
+- [MUST] Enforce docstring/signature consistency with `pydoclint`.
 - [MUST] Keep import boundaries compatible with repository rules when boundary tooling is configured.
 - [SHOULD] Prefer one canonical command sequence for local validation to reduce drift across contributors.
+- [MUST] `pyproject.toml` includes and maintains Ruff pydocstyle configuration with Google convention.
+- [MUST] `pyproject.toml` includes and maintains `interrogate` with `fail-under = 95`.
+- [MUST] `pyproject.toml` includes and maintains `pydoclint` with Google style and return-type checks.
+- [MUST] `pyproject.toml` includes and maintains coverage report threshold with `fail_under = 90`.
+- [MUST] `pyproject.toml` keeps `line-length = 100` and `target-version = "py312"` for Ruff unless intentionally changed and documented.
 
 ## Agent Action Checklist
 
 - Run lint and format checks before finalizing changes.
+- Run docstring quality checks (`interrogate` and `pydoclint`) before finalizing changes.
 - Run type checks for modified modules.
 - Run targeted tests first, then broader tests when practical.
 - Report any tool that could not be run and why.
@@ -283,6 +309,8 @@ Applies to Python quality tooling, typing, formatting, and local validation comm
 
 - `ruff check .`
 - `ruff format --check .`
+- `interrogate .`
+- `pydoclint src`
 - `mypy .` or `pyright`
 - `pytest -q`
 
@@ -296,6 +324,31 @@ Applies to day-to-day agent execution flow for implementation, debugging, and de
 
 - [MUST] Before changing code, inspect relevant files.
 - [MUST] Before changing code, identify the smallest safe change.
+- [MUST] Never commit directly to `main`.
+- [MUST] Always create a short-lived, task-specific feature branch from latest `main` using `codex/<scope>-<short-description>`.
+- [MUST] Use lowercase letters, numbers, and hyphens only in branch names.
+- [MUST] Do not use vague branch names such as `codex/fixes`, `codex/update`, `codex/big-change`, `codex/refactor-all`, or `codex/work`.
+- [MUST] Keep one branch to one logical change.
+- [MUST] Before starting a task, run `git status`, `git branch --show-current`, `git fetch origin`, `git checkout main`, and `git pull --ff-only origin main`.
+- [MUST] If the working tree is not clean before starting, stop and report changed files.
+- [MUST] Do not overwrite, delete, stash, reset, or otherwise discard user changes unless explicitly instructed.
+- [MUST] Before committing, run `ruff check .`, `pyright`, `pytest`, and `coverage run -m pytest`.
+- [MUST] If configured, also run `pre-commit run --all-files` and include repository-specific typing or import boundary checks.
+- [MUST] If a required check fails, fix it before commit or clearly report why it is unrelated and safe to defer.
+- [MUST] Before committing, inspect `git diff` and `git status` and ensure only task-relevant changes are included.
+- [MUST] Use concise imperative commit messages.
+- [MUST] Push the feature branch and open a pull request into `main`.
+- [MUST] Never self-merge a pull request unless explicitly instructed.
+- [SHOULD] Prefer squash merge and delete the feature branch after merge.
+- [MUST] If rebasing requires history rewrite, only use `git push --force-with-lease`, never plain `git push --force`.
+- [MUST] After merge, sync with `git checkout main` and `git pull --ff-only origin main`.
+- [MUST] Do not weaken tests to make them pass.
+- [MUST] Do not remove type hints.
+- [MUST] Do not introduce hidden network calls.
+- [MUST] Never commit secrets, credentials, tokens, `.env` files, or private paths.
+- [MUST] Do not commit generated local artifacts unless explicitly required by the task.
+- [MUST] Keep architecture boundaries explicit.
+- [SHOULD] Prefer small, reviewable commits.
 - [MUST] Preserve existing public contracts unless explicitly asked to change them.
 - [MUST] Add or update tests for behavioral changes.
 - [MUST] Run relevant quality gates.
@@ -307,18 +360,63 @@ Applies to day-to-day agent execution flow for implementation, debugging, and de
 - [MUST] Update tests and documentation in the same change set for behavior changes.
 - [MUST] During debugging, run CLI commands with `--debug` where available and analyze logfile output while scripts run.
 - [SHOULD] Add targeted diagnostic logs when they improve failure isolation.
+- [MUST] Do not run destructive commands without explicit instruction, including `git reset --hard`, `git clean -fd`, `git clean -fdx`, `git checkout -- .`, `git restore .`, `git stash`, `git push --force`, and `rm -rf`.
+
+## Pull Request Body Template
+
+Remove checks that do not exist in the repository.
+
+```markdown
+## Summary
+
+- Describe what changed.
+- Describe why it changed.
+
+## Dataset / Pipeline Impact
+
+- State affected datasets, layers, or commands.
+- State whether Bronze, Silver, or Gold behavior changed.
+
+## Validation
+
+- [ ] ruff check .
+- [ ] ruff format .
+- [ ] mypy .
+- [ ] pyright
+- [ ] ty check
+- [ ] lint-imports --config .importlinter
+- [ ] pytest
+- [ ] pytest --cov
+- [ ] pre-commit run --all-files
+
+## Risk
+
+- Low / Medium / High
+- Explain possible breakage or migration concerns.
+
+## Notes
+
+- Mention follow-up work.
+- Mention known limitations.
+```
 
 ## Agent Action Checklist
 
 - Reproduce issue with deterministic inputs.
+- Verify clean working tree before branch creation.
+- Create focused branch from latest `main`.
 - Identify impacted contracts, side effects, and test scope.
 - Implement minimal fix or focused improvement.
+- Inspect diff to keep only task-related files.
+- Push branch and open PR targeting `main`.
 - Validate with quality gates and tests.
+- Do not merge without explicit instruction.
 - Summarize risks, residual gaps, and follow-up work.
 
 ## Definition of Done
 
 - Requested change is implemented and validated.
+- Work enters `main` only through a pull request from a focused feature branch.
 - Debug and failure paths are observable.
 - Docs and tests match the updated behavior.
 
@@ -327,6 +425,15 @@ Applies to day-to-day agent execution flow for implementation, debugging, and de
 - `pytest -q`
 - `ruff check .`
 - `ruff format --check .`
+- `git status`
+- `git branch --show-current`
+- `git fetch origin`
+- `git checkout main`
+- `git pull --ff-only origin main`
+- `git checkout -b codex/<task-name>`
+- `git diff`
+- `gh pr create --base main --head codex/<task-name> --fill`
+- `gh pr checks`
 
 ## Security
 

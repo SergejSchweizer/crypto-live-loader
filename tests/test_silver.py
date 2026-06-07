@@ -192,6 +192,29 @@ def test_transform_l2_bronze_to_silver_processes_only_changed_bronze_partitions(
     assert records["ts_event"].to_list() == [snapshot_1.timestamp, snapshot_2.timestamp]
 
 
+def test_transform_l2_bronze_to_silver_merges_monthly_partition_group(tmp_path: Path) -> None:
+    """Verify grouped Bronze reads merge all changed days into monthly Silver."""
+
+    bronze_root = tmp_path / "bronze"
+    silver_root = tmp_path / "silver"
+    snapshot_1 = _sample_l2_snapshot(day=5)
+    snapshot_2 = _sample_l2_snapshot(day=6)
+    save_l2_snapshot_parquet_lake({"BTC": [snapshot_1, snapshot_2]}, lake_root=str(bronze_root), depth=50)
+
+    files = transform_l2_bronze_to_silver(
+        bronze_lake_root=str(bronze_root),
+        silver_lake_root=str(silver_root),
+        depth=50,
+        plot=False,
+        manifest=False,
+    )
+
+    assert len(files) == 1
+    records = pl.read_parquet(files[0])
+    assert records.height == 2
+    assert records["ts_event"].to_list() == [snapshot_1.timestamp, snapshot_2.timestamp]
+
+
 def test_transform_l2_bronze_to_silver_rebuilds_when_depth_changes(tmp_path: Path) -> None:
     """Verify transform settings are part of Silver incremental invalidation."""
 
