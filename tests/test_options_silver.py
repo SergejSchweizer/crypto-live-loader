@@ -11,6 +11,8 @@ import polars as pl
 from ingestion.options import OptionTickerSnapshotRow
 from ingestion.options_lake import save_options_ticker_snapshot_parquet_lake
 from ingestion.options_silver import (
+    OPTION_BRONZE_READ_BATCH_SIZE,
+    _option_bronze_file_groups,
     option_chain_features_from_bronze,
     option_silver_partition_path,
     option_silver_transform_state_path,
@@ -149,3 +151,18 @@ def test_transform_option_bronze_to_silver_merges_monthly_partition_group(tmp_pa
     records = pl.read_parquet(parquet_files)
     assert records.height == 2
     assert records["ts_snapshot"].dt.date().to_list() == [row_1.snapshot_time.date(), row_2.snapshot_time.date()]
+
+
+def test_option_bronze_file_groups_bound_daily_reads() -> None:
+    files = [
+        Path(
+            "lake/bronze/dataset_type=options_ticker_snapshot_1m/exchange=deribit/"
+            "instrument_type=option/currency=BTC/source=rest/date=2026-06-01/"
+            f"part-{index:06d}.parquet"
+        )
+        for index in range(OPTION_BRONZE_READ_BATCH_SIZE + 1)
+    ]
+
+    groups = _option_bronze_file_groups(files)
+
+    assert [len(group) for group in groups] == [OPTION_BRONZE_READ_BATCH_SIZE, 1]
