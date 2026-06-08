@@ -26,6 +26,7 @@ def locked_output_path(path: Path, timeout_s: float = DEFAULT_LOCK_TIMEOUT_S) ->
             lock_fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             os.write(lock_fd, str(os.getpid()).encode("utf-8"))
         except FileExistsError:
+            _remove_stale_lock(lock_path)
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"Timed out waiting for lock {lock_path}") from None
             time.sleep(DEFAULT_LOCK_POLL_INTERVAL_S)
@@ -38,3 +39,25 @@ def locked_output_path(path: Path, timeout_s: float = DEFAULT_LOCK_TIMEOUT_S) ->
             lock_path.unlink()
         except FileNotFoundError:
             pass
+
+
+def _remove_stale_lock(lock_path: Path) -> None:
+    """Remove a lock whose owning process no longer exists."""
+
+    try:
+        pid = int(lock_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return
+    if pid <= 0:
+        return
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        # Killed writers cannot run the context-manager cleanup path, so the next
+        # writer must recover the orphaned lock before retrying the atomic write.
+        try:
+            lock_path.unlink()
+        except FileNotFoundError:
+            pass
+    except PermissionError:
+        return

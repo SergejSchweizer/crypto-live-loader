@@ -8,9 +8,11 @@ from pathlib import Path
 from typing import Any
 
 import polars as pl
+import pyarrow.parquet as pq
 
 from ingestion.artifact_io import column_dtype_metadata, timestamp_bounds_iso, write_json_artifact
 from ingestion.artifact_state import file_fingerprints, load_json_state, write_json_state
+from ingestion.file_lock import locked_output_path
 from ingestion.incremental import changed_input_files, inputs_unchanged
 from ingestion.polars_parquet_store import upsert_partition_parquet
 
@@ -18,6 +20,7 @@ SILVER_OPTION_DATASET_TYPE = "option_chain_features_1m"
 SILVER_OPTION_SCHEMA_VERSION = "v1"
 SILVER_OPTION_NATURAL_KEY = ["exchange", "currency", "instrument_name", "ts_snapshot"]
 SILVER_OPTION_STATE_FILE_NAME = "_silver_options_transform_state.json"
+OPTION_BRONZE_READ_BATCH_SIZE = 240
 
 OptionSilverPartitionKey = tuple[str, str, str, str]
 
@@ -75,13 +78,13 @@ def transform_option_bronze_to_silver(
         current_fingerprints=current_fingerprints,
     )
 
+    all_groups = _option_bronze_partition_groups(bronze_files)
+    changed_groups = _option_bronze_partition_groups(changed_files)
     written_files: set[str] = set()
-    for group in _option_bronze_file_groups(changed_files):
-        bronze = pl.read_parquet([str(path) for path in group])
-        silver = option_chain_features_from_bronze(bronze)
+    for key in changed_groups:
         written_files.update(
-            save_silver_option_chain_features(
-                silver=silver,
+            _replace_silver_option_partition_from_bronze_files(
+                bronze_files=all_groups[key],
                 lake_root=silver_lake_root,
                 plot=False,
                 manifest=False,
@@ -102,8 +105,8 @@ def transform_option_bronze_to_silver(
     return sorted(written_files)
 
 
-def _option_bronze_file_groups(files: list[Path]) -> list[list[Path]]:
-    """Group changed option inputs by output currency and month for one monthly upsert."""
+def _option_bronze_partition_groups(files: list[Path]) -> dict[tuple[str, str], list[Path]]:
+    """Group option bronze inputs by the monthly Silver partition they rebuild."""
 
     grouped: dict[tuple[str, str], list[Path]] = {}
     for path in files:
@@ -112,7 +115,29 @@ def _option_bronze_file_groups(files: list[Path]) -> list[list[Path]]:
             _path_partition_value(path, "date", prefix_length=7) or "",
         )
         grouped.setdefault(key, []).append(path)
-    return [sorted(group) for _, group in sorted(grouped.items())]
+    return {key: sorted(group) for key, group in sorted(grouped.items())}
+
+
+def _option_bronze_file_groups(files: list[Path]) -> list[list[Path]]:
+    """Group changed option inputs into bounded batches for monthly output upserts."""
+
+    grouped: dict[tuple[str, str, str], list[Path]] = {}
+    for path in files:
+        key = (
+            _path_partition_value(path, "currency") or "",
+            _path_partition_value(path, "date", prefix_length=7) or "",
+            _path_partition_value(path, "date") or "",
+        )
+        grouped.setdefault(key, []).append(path)
+
+    batches: list[list[Path]] = []
+    for _, group in sorted(grouped.items()):
+        sorted_group = sorted(group)
+        # Option snapshots are high-cardinality market data; bounded reads prevent an
+        # initial backfill from materializing a full currency-month of bronze parquet.
+        for start_index in range(0, len(sorted_group), OPTION_BRONZE_READ_BATCH_SIZE):
+            batches.append(sorted_group[start_index : start_index + OPTION_BRONZE_READ_BATCH_SIZE])
+    return batches
 
 
 def _path_partition_value(path: Path, name: str, prefix_length: int | None = None) -> str | None:
@@ -132,6 +157,12 @@ def option_bronze_parquet_files(bronze_lake_root: str) -> list[Path]:
 
 def option_chain_features_from_bronze(bronze: pl.DataFrame) -> pl.DataFrame:
     """Build one silver option-chain row per bronze option snapshot row."""
+
+    return _option_chain_features_from_bronze_lazy(bronze.lazy()).collect()
+
+
+def _option_chain_features_from_bronze_lazy(bronze: pl.LazyFrame) -> pl.LazyFrame:
+    """Build lazy silver option-chain features without materializing bronze inputs first."""
 
     expiry_date_expr = (
         pl.col("instrument_name")
@@ -239,6 +270,76 @@ def option_chain_features_from_bronze(bronze: pl.DataFrame) -> pl.DataFrame:
         "is_valid_for_surface",
         "quality_flags",
     )
+
+
+def _replace_silver_option_partition_from_bronze_files(
+    bronze_files: list[Path],
+    lake_root: str,
+    plot: bool,
+    manifest: bool,
+) -> list[str]:
+    """Replace one monthly Silver options partition from a complete bronze file set."""
+
+    if not bronze_files:
+        return []
+
+    first_path = bronze_files[0]
+    key = (
+        _path_partition_value(first_path, "exchange") or "",
+        _path_partition_value(first_path, "instrument_type") or "",
+        _path_partition_value(first_path, "currency") or "",
+        _path_partition_value(first_path, "date", prefix_length=7) or "",
+    )
+    part_dir = option_silver_partition_path(lake_root=lake_root, key=key)
+    month_partition = key[3]
+    file_path = part_dir / f"{month_partition}.parquet"
+    metadata_path = part_dir / f"{month_partition}.json"
+    plot_path = part_dir / f"{month_partition}.png"
+    staging_path = part_dir / f".staging-{datetime.now(UTC).strftime('%Y%m%dT%H%M%S%f')}.parquet"
+
+    part_dir.mkdir(parents=True, exist_ok=True)
+    with locked_output_path(file_path):
+        writer: pq.ParquetWriter | None = None
+        try:
+            for batch in _option_bronze_file_groups(bronze_files):
+                bronze = pl.read_parquet([str(path) for path in batch])
+                # Full backfills can exceed host memory when materialized as one
+                # currency-month; batch-level sorting keeps row groups deterministic
+                # while preserving one monthly artifact per Silver partition.
+                silver = (
+                    option_chain_features_from_bronze(bronze)
+                    .unique(subset=SILVER_OPTION_NATURAL_KEY, keep="last")
+                    .sort("ts_snapshot")
+                )
+                if silver.is_empty():
+                    continue
+                table = silver.to_arrow()
+                if writer is None:
+                    writer = pq.ParquetWriter(staging_path, table.schema, compression="zstd")
+                assert writer is not None
+                writer.write_table(table)
+            if writer is not None:
+                writer.close()
+                writer = None
+                staging_path.replace(file_path)
+        finally:
+            if writer is not None:
+                writer.close()
+            try:
+                staging_path.unlink()
+            except FileNotFoundError:
+                pass
+
+    written_files = [str(file_path.resolve())]
+    if manifest or plot:
+        silver = pl.read_parquet(file_path)
+        if manifest:
+            write_json_artifact(metadata_path, silver_option_artifact_metadata(silver))
+            written_files.append(str(metadata_path.resolve()))
+        if plot:
+            write_silver_option_profile_png(silver, plot_path)
+            written_files.append(str(plot_path.resolve()))
+    return sorted(written_files)
 
 
 def save_silver_option_chain_features(
