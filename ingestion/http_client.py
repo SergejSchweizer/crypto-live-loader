@@ -61,14 +61,14 @@ def get_json(
     """Fetch and decode JSON from an HTTP GET endpoint.
 
     Args:
-        url: Base URL.
-        params: Optional query params.
-        timeout_s: Socket timeout in seconds.
-        max_retries: Number of retries after first request failure.
-        retry_backoff_s: Base backoff in seconds used between retries.
+        url (str): Base URL.
+        params (dict[str, Any] | None): Optional query params.
+        timeout_s (float | None): Socket timeout in seconds.
+        max_retries (int | None): Number of retries after first request failure.
+        retry_backoff_s (float | None): Base backoff in seconds used between retries.
 
     Returns:
-        Parsed JSON payload.
+        Any: Parsed JSON payload.
 
     Raises:
         HttpClientError: If request fails or payload is invalid JSON.

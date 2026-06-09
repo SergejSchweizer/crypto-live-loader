@@ -16,10 +16,17 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "coverage~=7.14.1",
+  "import-linter~=2.11",
+  "interrogate~=1.7.0",
   "mypy~=1.20.2",
+  "pre-commit~=4.6.0",
+  "pydoclint~=0.8.6",
   "pyright~=1.1.407",
   "pytest~=9.0.3",
   "ruff~=0.15.12",
+  "ty~=0.0.44",
+  "uv~=0.11.19",
 ]
 
 [tool.setuptools.packages.find]
@@ -67,3 +74,29 @@ reportUnknownLambdaType = "none"
 reportUnknownParameterType = "none"
 reportMissingParameterType = "none"
 reportMissingTypeArgument = "warning"
+
+[tool.coverage.run]
+source = ["api", "domain", "ingestion", "sources"]
+
+[tool.coverage.report]
+fail_under = 90
+show_missing = true
+skip_covered = false
+
+[tool.interrogate]
+exclude = ["scripts", "tests"]
+fail-under = 95
+ignore-init-method = true
+ignore-init-module = true
+ignore-magic = true
+ignore-module = false
+ignore-nested-functions = true
+ignore-private = true
+ignore-property-decorators = true
+ignore-semiprivate = true
+quiet = true
+
+[tool.pydoclint]
+style = "google"
+check-return-types = true
+check-yield-types = true

@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import polars as pl
 import pyarrow.parquet as pq
@@ -158,7 +158,10 @@ def option_bronze_parquet_files(bronze_lake_root: str) -> list[Path]:
 def option_chain_features_from_bronze(bronze: pl.DataFrame) -> pl.DataFrame:
     """Build one silver option-chain row per bronze option snapshot row."""
 
-    return _option_chain_features_from_bronze_lazy(bronze.lazy()).collect()
+    return cast(  # type: ignore[redundant-cast]  # ty sees LazyFrame.collect as DataFrame | InProcessQuery.
+        pl.DataFrame,
+        _option_chain_features_from_bronze_lazy(bronze.lazy()).collect(),
+    )
 
 
 def _option_chain_features_from_bronze_lazy(bronze: pl.LazyFrame) -> pl.LazyFrame:
@@ -299,7 +302,8 @@ def _replace_silver_option_partition_from_bronze_files(
 
     part_dir.mkdir(parents=True, exist_ok=True)
     with locked_output_path(file_path):
-        writer: pq.ParquetWriter | None = None
+        writer: Any | None = None
+        parquet_writer_factory: Any = pq.ParquetWriter
         try:
             for batch in _option_bronze_file_groups(bronze_files):
                 bronze = pl.read_parquet([str(path) for path in batch])
@@ -315,7 +319,7 @@ def _replace_silver_option_partition_from_bronze_files(
                     continue
                 table = silver.to_arrow()
                 if writer is None:
-                    writer = pq.ParquetWriter(staging_path, table.schema, compression="zstd")
+                    writer = parquet_writer_factory(staging_path, table.schema, compression="zstd")
                 assert writer is not None
                 writer.write_table(table)
             if writer is not None:
