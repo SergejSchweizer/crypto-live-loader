@@ -1054,6 +1054,7 @@ def _run_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger
             "source_currency": source_currency_by_requested.get(currency, ""),
         }
 
+    errors = list(fetch_errors.values()) + normalization_errors
     output = {
         "command": OPTIONS_BRONZE_BUILDER_COMMAND,
         "exchange": cast(str, args.exchange),
@@ -1064,10 +1065,9 @@ def _run_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger
         "rows_written": sum(len(rows) for rows in rows_by_currency.values()),
         "currency_results": currency_results,
         "output_files": output_files,
-        "errors": list(fetch_errors.values()) + normalization_errors,
+        "errors": errors,
     }
     _emit_json_output(bool(args.json_output), output)
-    errors = cast(list[str], output["errors"])
     _log_job_event(
         logger,
         logging.INFO,

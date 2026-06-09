@@ -33,6 +33,19 @@ class L2FetchConfig:
 class L2Snapshot:
     """One normalized L2 snapshot.
 
+    Attributes:
+        exchange (str): Venue identifier that produced the snapshot.
+        symbol (str): Exchange-native instrument symbol.
+        timestamp (datetime): Exchange event timestamp normalized to UTC.
+        fetch_duration_s (float): Wall-clock seconds spent fetching the snapshot.
+        bids (list[tuple[float, float]]): Bid levels as ``(price, amount)`` tuples.
+        asks (list[tuple[float, float]]): Ask levels as ``(price, amount)`` tuples.
+        mark_price (float | None): Optional mark price supplied by the venue.
+        index_price (float | None): Optional index price supplied by the venue.
+        open_interest (float | None): Optional open interest supplied by the venue.
+        funding_8h (float | None): Optional eight-hour funding rate supplied by the venue.
+        current_funding (float | None): Optional current funding rate supplied by the venue.
+
     Example:
         ```python
         from datetime import UTC, datetime

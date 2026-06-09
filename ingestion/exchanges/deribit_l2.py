@@ -13,11 +13,15 @@ def fetch_order_book_snapshot(symbol: str, depth: int = 50) -> dict[str, object]
     """Fetch one Deribit perpetual orderbook snapshot.
 
     Args:
-        symbol: User symbol or alias (for example ``BTC``).
-        depth: Number of levels per side to request from Deribit.
+        symbol (str): User symbol or alias (for example ``BTC``).
+        depth (int): Number of levels per side to request from Deribit.
 
     Returns:
-        Normalized dictionary containing timestamp, bids, asks and perp fields.
+        dict[str, object]: Normalized dictionary containing timestamp, bids,
+            asks, and perpetual contract fields.
+
+    Raises:
+        ValueError: If request settings or the Deribit payload shape are invalid.
     """
 
     if depth <= 0:

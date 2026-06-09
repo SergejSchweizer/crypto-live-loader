@@ -8,16 +8,41 @@ repos:
     hooks:
       - id: mypy
         name: mypy
-        entry: python -m mypy .
+        entry: .venv/bin/python -m mypy .
         language: system
         pass_filenames: false
       - id: pyright
         name: pyright
-        entry: python -m pyright
+        entry: .venv/bin/python -m pyright
+        language: system
+        pass_filenames: false
+      - id: ty
+        name: ty
+        entry: .venv/bin/ty check
+        language: system
+        pass_filenames: false
+      - id: interrogate
+        name: interrogate
+        entry: .venv/bin/interrogate .
+        language: system
+        pass_filenames: false
+      - id: pydoclint
+        name: pydoclint
+        entry: .venv/bin/pydoclint api domain ingestion sources main.py
         language: system
         pass_filenames: false
       - id: pytest
         name: pytest
-        entry: python -m pytest -q
+        entry: .venv/bin/python -m pytest -q
+        language: system
+        pass_filenames: false
+      - id: coverage
+        name: coverage
+        entry: .venv/bin/python -m coverage run -m pytest
+        language: system
+        pass_filenames: false
+      - id: coverage-report
+        name: coverage report
+        entry: .venv/bin/python -m coverage report
         language: system
         pass_filenames: false

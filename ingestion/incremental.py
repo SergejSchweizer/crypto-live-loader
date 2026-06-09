@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import cast
 
 from ingestion.artifact_state import FileFingerprint
 
@@ -31,9 +32,10 @@ def changed_input_files(
     if deleted_inputs:
         return list(files)
 
+    previous = cast(dict[str, FileFingerprint], previous_fingerprints)
     changed: list[Path] = []
     for path in files:
         resolved_path = str(path.resolve())
-        if previous_fingerprints.get(resolved_path) != current_fingerprints[resolved_path]:
+        if previous.get(resolved_path) != current_fingerprints[resolved_path]:
             changed.append(path)
     return changed
