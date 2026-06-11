@@ -7,13 +7,13 @@ from pathlib import Path
 
 from ingestion.options import OptionTickerSnapshotRow
 
-OptionPartitionKey = tuple[str, str, str, str, str]
+OptionPartitionKey = tuple[str, str, str, str, str, str, str]
 
 
 def option_snapshot_partition_path(lake_root: str, key: OptionPartitionKey) -> Path:
     """Return the bronze destination directory for one option snapshot partition."""
 
-    dataset_type, exchange, instrument_type, currency, date_partition = key
+    dataset_type, exchange, instrument_type, currency, year_partition, month_partition, date_partition = key
     return (
         Path(lake_root)
         / f"dataset_type={dataset_type}"
@@ -21,6 +21,8 @@ def option_snapshot_partition_path(lake_root: str, key: OptionPartitionKey) -> P
         / f"instrument_type={instrument_type}"
         / f"currency={currency}"
         / "source=rest_get_book_summary_by_currency"
+        / f"year={year_partition}"
+        / f"month={month_partition}"
         / f"date={date_partition}"
     )
 
@@ -83,7 +85,9 @@ def save_options_ticker_snapshot_parquet_lake(
                 row.exchange,
                 row.instrument_type,
                 row.currency,
-                row.snapshot_time.strftime("%Y-%m-%d"),
+                row.snapshot_time.strftime("%Y"),
+                row.snapshot_time.strftime("%m"),
+                row.snapshot_time.strftime("%d"),
             )
             grouped[key].append(options_ticker_snapshot_record(row))
 

@@ -157,7 +157,7 @@ def test_option_bronze_file_groups_bound_daily_reads() -> None:
     files = [
         Path(
             "lake/bronze/dataset_type=options_ticker_snapshot_1m/exchange=deribit/"
-            "instrument_type=option/currency=BTC/source=rest/date=2026-06-01/"
+            "instrument_type=option/currency=BTC/source=rest/year=2026/month=06/date=01/"
             f"part-{index:06d}.parquet"
         )
         for index in range(OPTION_BRONZE_READ_BATCH_SIZE + 1)

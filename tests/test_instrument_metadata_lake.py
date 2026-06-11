@@ -45,9 +45,11 @@ def _sample_row(instrument_name: str = "BTC-30JUN26-120000-C") -> InstrumentMeta
 def test_instrument_metadata_partition_path() -> None:
     result = instrument_metadata_partition_path(
         "lake/bronze",
-        ("instrument_metadata_snapshot_daily", "deribit", "2026-05-24"),
+        ("instrument_metadata_snapshot_daily", "deribit", "2026", "05", "24"),
     )
-    assert str(result).endswith("dataset_type=instrument_metadata_snapshot_daily/exchange=deribit/date=2026-05-24")
+    assert str(result).endswith(
+        "dataset_type=instrument_metadata_snapshot_daily/exchange=deribit/year=2026/month=05/date=24"
+    )
 
 
 def test_save_instrument_metadata_snapshot_parquet_lake_writes_partitioned_file(tmp_path: Path) -> None:

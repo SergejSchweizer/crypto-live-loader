@@ -35,12 +35,12 @@ def test_l2_snapshot_partition_path() -> None:
 
     result = snapshot_partition_path(
         "lake/bronze",
-        ("deribit", "perp", "BTC-PERPETUAL", 50, "rest_order_book", "2026-05", "2026-05-05"),
+        ("deribit", "perp", "BTC-PERPETUAL", 50, "rest_order_book", "2026", "05", "05"),
     )
 
     assert str(result).endswith(
         "dataset_type=l2_snapshot/exchange=deribit/instrument_type=perp/"
-        "symbol=BTC-PERPETUAL/depth=50/source=rest_order_book/month=2026-05/date=2026-05-05"
+        "symbol=BTC-PERPETUAL/depth=50/source=rest_order_book/year=2026/month=05/date=05"
     )
 
 
@@ -59,14 +59,14 @@ def test_save_l2_snapshot_parquet_lake_uses_daily_bronze_layout(tmp_path: Path) 
     assert len(files) == 2
     assert any(
         "/dataset_type=l2_snapshot/exchange=deribit/instrument_type=perp/"
-        "symbol=BTC-PERPETUAL/depth=50/source=rest_order_book/month=2026-05/"
-        "date=2026-05-05/data.parquet" in file_path
+        "symbol=BTC-PERPETUAL/depth=50/source=rest_order_book/year=2026/month=05/"
+        "date=05/data.parquet" in file_path
         for file_path in files
     )
     assert any(
         "/dataset_type=l2_snapshot/exchange=deribit/instrument_type=perp/"
-        "symbol=BTC-PERPETUAL/depth=50/source=rest_order_book/month=2026-05/"
-        "date=2026-05-06/data.parquet" in file_path
+        "symbol=BTC-PERPETUAL/depth=50/source=rest_order_book/year=2026/month=05/"
+        "date=06/data.parquet" in file_path
         for file_path in files
     )
 

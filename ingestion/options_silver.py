@@ -112,7 +112,7 @@ def _option_bronze_partition_groups(files: list[Path]) -> dict[tuple[str, str], 
     for path in files:
         key = (
             _path_partition_value(path, "currency") or "",
-            _path_partition_value(path, "date", prefix_length=7) or "",
+            _path_month_partition(path) or "",
         )
         grouped.setdefault(key, []).append(path)
     return {key: sorted(group) for key, group in sorted(grouped.items())}
@@ -125,8 +125,8 @@ def _option_bronze_file_groups(files: list[Path]) -> list[list[Path]]:
     for path in files:
         key = (
             _path_partition_value(path, "currency") or "",
-            _path_partition_value(path, "date", prefix_length=7) or "",
-            _path_partition_value(path, "date") or "",
+            _path_month_partition(path) or "",
+            _path_day_partition(path) or "",
         )
         grouped.setdefault(key, []).append(path)
 
@@ -147,6 +147,29 @@ def _path_partition_value(path: Path, name: str, prefix_length: int | None = Non
             value = part[len(prefix) :]
             return value[:prefix_length] if prefix_length is not None else value
     return None
+
+
+def _path_month_partition(path: Path) -> str | None:
+    """Return the logical ``YYYY-MM`` month for current and legacy bronze layouts."""
+
+    year_partition = _path_partition_value(path, "year")
+    month_partition = _path_partition_value(path, "month")
+    if year_partition and month_partition and len(month_partition) == 2:
+        return f"{year_partition}-{month_partition}"
+    if month_partition and len(month_partition) == 7:
+        return month_partition
+    return _path_partition_value(path, "date", prefix_length=7)
+
+
+def _path_day_partition(path: Path) -> str | None:
+    """Return a stable daily grouping key for current and legacy bronze layouts."""
+
+    year_partition = _path_partition_value(path, "year")
+    month_partition = _path_partition_value(path, "month")
+    date_partition = _path_partition_value(path, "date")
+    if year_partition and month_partition and date_partition and len(month_partition) == 2 and len(date_partition) == 2:
+        return f"{year_partition}-{month_partition}-{date_partition}"
+    return date_partition
 
 
 def option_bronze_parquet_files(bronze_lake_root: str) -> list[Path]:
@@ -291,7 +314,7 @@ def _replace_silver_option_partition_from_bronze_files(
         _path_partition_value(first_path, "exchange") or "",
         _path_partition_value(first_path, "instrument_type") or "",
         _path_partition_value(first_path, "currency") or "",
-        _path_partition_value(first_path, "date", prefix_length=7) or "",
+        _path_month_partition(first_path) or "",
     )
     part_dir = option_silver_partition_path(lake_root=lake_root, key=key)
     month_partition = key[3]
