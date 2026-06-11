@@ -8,15 +8,22 @@ from pathlib import Path
 from ingestion.instrument_metadata import InstrumentMetadataSnapshotRow
 from ingestion.parquet_repository import ParquetUpsertRepository
 
-InstrumentMetadataPartitionKey = tuple[str, str, str]
+InstrumentMetadataPartitionKey = tuple[str, str, str, str, str]
 InstrumentMetadataNaturalKey = tuple[str, str, str]
 
 
 def instrument_metadata_partition_path(lake_root: str, key: InstrumentMetadataPartitionKey) -> Path:
     """Return destination directory for one daily instrument metadata partition."""
 
-    dataset_type, exchange, date_partition = key
-    return Path(lake_root) / f"dataset_type={dataset_type}" / f"exchange={exchange}" / f"date={date_partition}"
+    dataset_type, exchange, year_partition, month_partition, date_partition = key
+    return (
+        Path(lake_root)
+        / f"dataset_type={dataset_type}"
+        / f"exchange={exchange}"
+        / f"year={year_partition}"
+        / f"month={month_partition}"
+        / f"date={date_partition}"
+    )
 
 
 def instrument_metadata_snapshot_record(row: InstrumentMetadataSnapshotRow) -> dict[str, object]:
@@ -70,7 +77,9 @@ def save_instrument_metadata_snapshot_parquet_lake(
             key: InstrumentMetadataPartitionKey = (
                 row.dataset_type,
                 row.exchange,
-                row.snapshot_date.isoformat(),
+                row.snapshot_date.strftime("%Y"),
+                row.snapshot_date.strftime("%m"),
+                row.snapshot_date.strftime("%d"),
             )
             grouped[key].append(instrument_metadata_snapshot_record(row))
 

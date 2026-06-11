@@ -52,11 +52,11 @@ def test_bronze_partition_path() -> None:
 
     result = option_snapshot_partition_path(
         "lake/bronze",
-        ("options_ticker_snapshot_1m", "deribit", "option", "BTC", "2026-05-24"),
+        ("options_ticker_snapshot_1m", "deribit", "option", "BTC", "2026", "05", "24"),
     )
     assert str(result).endswith(
         "dataset_type=options_ticker_snapshot_1m/exchange=deribit/instrument_type=option/currency=BTC/"
-        "source=rest_get_book_summary_by_currency/date=2026-05-24"
+        "source=rest_get_book_summary_by_currency/year=2026/month=05/date=24"
     )
 
 

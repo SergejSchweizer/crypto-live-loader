@@ -15,7 +15,7 @@ from ingestion.l2 import (
 )
 from ingestion.parquet_repository import ParquetUpsertRepository
 
-SnapshotPartitionKey = tuple[str, str, str, int, str, str, str]
+SnapshotPartitionKey = tuple[str, str, str, int, str, str, str, str]
 SnapshotNaturalKey = tuple[str, str, str, int, str, datetime]
 
 
@@ -28,7 +28,7 @@ def utc_run_id() -> str:
 def snapshot_partition_path(lake_root: str, key: SnapshotPartitionKey) -> Path:
     """Return the bronze destination directory for one raw L2 snapshot partition."""
 
-    exchange, instrument_type, symbol, depth, source, month_partition, date_partition = key
+    exchange, instrument_type, symbol, depth, source, year_partition, month_partition, date_partition = key
     return (
         Path(lake_root)
         / "dataset_type=l2_snapshot"
@@ -37,6 +37,7 @@ def snapshot_partition_path(lake_root: str, key: SnapshotPartitionKey) -> Path:
         / f"symbol={symbol}"
         / f"depth={depth}"
         / f"source={source}"
+        / f"year={year_partition}"
         / f"month={month_partition}"
         / f"date={date_partition}"
     )

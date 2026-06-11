@@ -10,19 +10,20 @@ from typing import cast
 from ingestion.index_price import IndexPriceSnapshotRow
 from ingestion.parquet_repository import ParquetUpsertRepository
 
-IndexPricePartitionKey = tuple[str, str, str, str, str]
+IndexPricePartitionKey = tuple[str, str, str, str, str, str]
 IndexPriceNaturalKey = tuple[str, str, datetime, str]
 
 
 def index_price_partition_path(lake_root: str, key: IndexPricePartitionKey) -> Path:
     """Return destination directory for one index price partition."""
 
-    dataset_type, exchange, index_name, month_partition, date_partition = key
+    dataset_type, exchange, index_name, year_partition, month_partition, date_partition = key
     return (
         Path(lake_root)
         / f"dataset_type={dataset_type}"
         / f"exchange={exchange}"
         / f"index_name={index_name}"
+        / f"year={year_partition}"
         / f"month={month_partition}"
         / f"date={date_partition}"
     )
@@ -72,8 +73,9 @@ def save_index_price_snapshot_parquet_lake(
                 row.dataset_type,
                 row.exchange,
                 row.index_name,
-                row.snapshot_time.strftime("%Y-%m"),
-                row.snapshot_time.strftime("%Y-%m-%d"),
+                row.snapshot_time.strftime("%Y"),
+                row.snapshot_time.strftime("%m"),
+                row.snapshot_time.strftime("%d"),
             )
             grouped[key].append(index_price_snapshot_record(row))
 
