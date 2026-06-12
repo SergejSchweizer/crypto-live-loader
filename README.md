@@ -183,7 +183,7 @@ Bronze root:
 ```text
 lake/bronze/
   dataset_type=l2_snapshot/exchange=<exchange>/instrument_type=perp/symbol=<symbol>/depth=<depth>/source=<source>/year=YYYY/month=MM/date=DD/data.parquet
-  dataset_type=options_ticker_snapshot_1m/exchange=<exchange>/instrument_type=option/currency=<currency>/source=<source>/year=YYYY/month=MM/date=DD/part-<run_id>.parquet
+  dataset_type=options_ticker_snapshot_1m/exchange=<exchange>/instrument_type=option/currency=<currency>/source=<source>/year=YYYY/month=MM/date=DD/data.parquet
   dataset_type=instrument_metadata_snapshot_daily/exchange=<exchange>/year=YYYY/month=MM/date=DD/data.parquet
   dataset_type=index_price_snapshot_1m/exchange=<exchange>/index_name=<index_name>/year=YYYY/month=MM/date=DD/data.parquet
 ```
@@ -227,7 +227,7 @@ State files are used to avoid redundant recomputation:
 
 Idempotency behavior:
 - Upsert-based datasets merge by natural keys and deterministic sort order.
-- Append-style options Bronze currently writes one parquet per run partition.
+- Options Bronze merges rows by snapshot natural key into one parquet file per daily partition.
 
 ## 10. Data Quality and Validation
 
