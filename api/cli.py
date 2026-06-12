@@ -18,6 +18,7 @@ from api.constants import (
     LEGACY_BRONZE_BUILDER_COMMAND,
     OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
     OPTIONS_BRONZE_BUILDER_COMMAND,
+    RECENT_TRADES_BRONZE_BUILDER_COMMAND,
     VALIDATE_SYMBOLS_COMMAND,
 )
 from api.runtime import configure_logging
@@ -85,12 +86,32 @@ from ingestion.options import (
     utc_run_id,
 )
 from ingestion.options_lake import save_options_ticker_snapshot_parquet_lake
+from ingestion.recent_trades import (
+    RECENT_TRADE_DATASET_TYPE,
+    RECENT_TRADE_SCHEMA_VERSION,
+    RECENT_TRADE_SOURCE,
+    RecentTradeSnapshotRow,
+    normalize_recent_trade_rows,
+    overlap_start_timestamp_ms,
+)
+from ingestion.recent_trades import (
+    snapshot_time_floor_minute as recent_trade_snapshot_time_floor_minute,
+)
+from ingestion.recent_trades import (
+    utc_run_id as recent_trade_utc_run_id,
+)
+from ingestion.recent_trades_lake import save_recent_trade_snapshot_parquet_lake
 from sources.deribit_index_price import fetch_index_price
 from sources.deribit_instruments import fetch_instruments
 from sources.deribit_option_ticker import fetch_option_ticker
 from sources.deribit_options import (
     fetch_option_book_summary_rows,
     resolve_options_currency_request,
+)
+from sources.deribit_trades import (
+    TradesCurrencyRequest,
+    fetch_last_trades_by_currency,
+    resolve_trades_currency_request,
 )
 from sources.registry import source_adapter_for_exchange
 
@@ -101,6 +122,7 @@ OptionRowsByCurrency = dict[str, list[OptionTickerSnapshotRow]]
 OptionInstrumentTickerRowsByInstrument = dict[str, OptionInstrumentTickerSnapshotRow]
 InstrumentMetadataRowsByDate = dict[str, list[InstrumentMetadataSnapshotRow]]
 IndexPriceRowsBySymbol = dict[str, list[IndexPriceSnapshotRow]]
+RecentTradeRowsByScope = dict[str, list[RecentTradeSnapshotRow]]
 CommandHandler: TypeAlias = Callable[[argparse.Namespace, logging.Logger, Config], None]
 
 
@@ -411,6 +433,85 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
     )
     _debug_flag(index_price_parser)
 
+    recent_trades_config = config_section(ingestion_config, "recent_trades")
+    recent_trades_parser = subparsers.add_parser(
+        RECENT_TRADES_BRONZE_BUILDER_COMMAND,
+        help="Fetch Deribit recent option/future trades and persist raw rows to the bronze parquet lake",
+    )
+    recent_trades_parser.add_argument(
+        "--exchange",
+        choices=["deribit"],
+        default="deribit",
+    )
+    recent_trades_parser.add_argument(
+        "--symbols",
+        "--currencies",
+        dest="currencies",
+        nargs="+",
+        default=config_str_list(recent_trades_config, "currencies", ["BTC", "ETH", "SOL"]),
+        type=str,
+        help="Trade tape symbols/currencies to fetch, separated by spaces or commas",
+    )
+    recent_trades_parser.add_argument(
+        "--kinds",
+        nargs="+",
+        default=config_str_list(recent_trades_config, "kinds", ["option", "future"]),
+        type=str,
+        help="Deribit trade kinds to fetch, for example option and future",
+    )
+    recent_trades_parser.add_argument(
+        "--count",
+        type=int,
+        default=config_int(recent_trades_config, "count", 1000),
+        help="Maximum trades to request per currency/kind",
+    )
+    recent_trades_parser.add_argument(
+        "--lookback-seconds",
+        type=int,
+        default=config_int(recent_trades_config, "lookback_seconds", 90),
+        help="Overlap window start in seconds before the run snapshot minute",
+    )
+    recent_trades_parser.add_argument(
+        "--start-timestamp-ms",
+        type=int,
+        default=None,
+        help="Explicit Deribit start_timestamp override in Unix milliseconds",
+    )
+    recent_trades_parser.add_argument(
+        "--sorting",
+        choices=["asc", "desc", "default"],
+        default=config_str(recent_trades_config, "sorting", "asc"),
+        help="Deribit trade sorting direction",
+    )
+    recent_trades_parser.add_argument(
+        "--lake-root",
+        default=config_str(recent_trades_config, "lake_root", "lake/bronze"),
+        help="Root directory for parquet lake files",
+    )
+    _boolean_optional_flag(
+        recent_trades_parser,
+        "save-parquet-lake",
+        config_bool(recent_trades_config, "save_parquet_lake", True),
+        "Save raw recent trade rows to bronze parquet lake partitions",
+    )
+    recent_trades_parser.add_argument(
+        "--source",
+        default=config_str(recent_trades_config, "source", RECENT_TRADE_SOURCE),
+        help="Source identifier written to bronze rows",
+    )
+    recent_trades_parser.add_argument(
+        "--schema-version",
+        default=config_str(recent_trades_config, "schema_version", RECENT_TRADE_SCHEMA_VERSION),
+        help="Schema version tag to annotate each normalized row",
+    )
+    _boolean_optional_flag(
+        recent_trades_parser,
+        "json-output",
+        config_bool(recent_trades_config, "json_output", config_bool(ingestion_config, "json_output", True)),
+        "Print JSON output",
+    )
+    _debug_flag(recent_trades_parser)
+
     validate_parser = subparsers.add_parser(
         VALIDATE_SYMBOLS_COMMAND,
         help="Resolve symbols and check whether Deribit returns a usable L2 book",
@@ -486,6 +587,17 @@ def _normalize_cli_index_symbols(values: list[str]) -> list[str]:
     if not symbols:
         raise ValueError("at least one index symbol is required")
     return symbols
+
+
+def _normalize_cli_trade_kinds(values: list[str]) -> list[str]:
+    """Normalize CLI trade kind values from space- or comma-delimited inputs."""
+
+    kinds: list[str] = []
+    for value in values:
+        kinds.extend(item.strip().lower() for item in value.replace(",", " ").split() if item.strip())
+    if not kinds:
+        raise ValueError("at least one trade kind is required")
+    return sorted(dict.fromkeys(kinds))
 
 
 def _normalize_cli_instruments(values: list[str]) -> list[str]:
@@ -565,6 +677,35 @@ def _fetch_option_ticker_rows_for_instruments(
         except Exception as exc:  # noqa: BLE001
             errors[instrument_name] = str(exc)
     return rows_by_instrument, errors
+
+
+def _fetch_recent_trade_rows_for_requests(
+    requests: list[TradesCurrencyRequest],
+    *,
+    count: int,
+    start_timestamp: int | None,
+    sorting: str,
+) -> tuple[dict[str, list[dict[str, object]]], dict[str, str]]:
+    """Fetch recent trade rows sequentially for all requested currency/kind pairs."""
+
+    rows_by_scope: dict[str, list[dict[str, object]]] = {}
+    errors: dict[str, str] = {}
+    for request in requests:
+        scope_key = _recent_trade_scope_key(request.requested_currency, request.kind)
+        try:
+            rows_by_scope[scope_key] = fetch_last_trades_by_currency(
+                request,
+                count=count,
+                start_timestamp=start_timestamp,
+                sorting=sorting,
+            )
+        except Exception as exc:  # noqa: BLE001
+            errors[scope_key] = str(exc)
+    return rows_by_scope, errors
+
+
+def _recent_trade_scope_key(currency: str, kind: str) -> str:
+    return f"{currency.strip().upper()}:{kind.strip().lower()}"
 
 
 def _log_bronze_builder_summary(
@@ -1106,6 +1247,111 @@ def _run_index_price_bronze_builder(args: argparse.Namespace, logger: logging.Lo
     )
 
 
+def _run_recent_trades_bronze_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """Run Deribit recent trade tape collection and optional Bronze persistence."""
+
+    started_at = perf_counter()
+    currencies = _normalize_cli_currencies(cast(list[str], args.currencies))
+    kinds = _normalize_cli_trade_kinds(cast(list[str], args.kinds))
+    count = int(args.count)
+    if count <= 0:
+        raise ValueError("count must be positive")
+    run_id = recent_trade_utc_run_id()
+    snapshot_time = recent_trade_snapshot_time_floor_minute()
+    ingested_at = datetime.now(UTC)
+    start_timestamp = cast(int | None, args.start_timestamp_ms)
+    if start_timestamp is None:
+        start_timestamp = overlap_start_timestamp_ms(
+            snapshot_time=snapshot_time,
+            lookback_seconds=int(args.lookback_seconds),
+        )
+
+    requests = [resolve_trades_currency_request(currency, kind) for currency in currencies for kind in kinds]
+    raw_rows_by_scope, fetch_errors = _fetch_recent_trade_rows_for_requests(
+        requests,
+        count=count,
+        start_timestamp=start_timestamp,
+        sorting=cast(str, args.sorting),
+    )
+
+    rows_by_scope: RecentTradeRowsByScope = {}
+    normalization_errors: list[str] = []
+    for request in requests:
+        scope_key = _recent_trade_scope_key(request.requested_currency, request.kind)
+        raw_rows = raw_rows_by_scope.get(scope_key, [])
+        rows, row_errors = normalize_recent_trade_rows(
+            raw_rows,
+            requested_currency=request.requested_currency,
+            source_currency=request.source_currency,
+            kind=request.kind,
+            run_id=run_id,
+            snapshot_time=snapshot_time,
+            ingested_at=ingested_at,
+            source=cast(str, args.source),
+            schema_version=cast(str, args.schema_version),
+        )
+        rows_by_scope[scope_key] = rows
+        normalization_errors.extend(row_errors)
+
+    all_rows = [row for rows in rows_by_scope.values() for row in rows]
+    output_files: list[str] = []
+    if bool(args.save_parquet_lake):
+        output_files = save_recent_trade_snapshot_parquet_lake(
+            rows=all_rows,
+            lake_root=cast(str, args.lake_root),
+        )
+
+    scope_results: dict[str, dict[str, object]] = {}
+    for request in requests:
+        scope_key = _recent_trade_scope_key(request.requested_currency, request.kind)
+        if scope_key in fetch_errors:
+            scope_results[scope_key] = {
+                "status": "error",
+                "rows": 0,
+                "error": fetch_errors[scope_key],
+            }
+            continue
+        scope_results[scope_key] = {
+            "status": "ok",
+            "rows": len(rows_by_scope.get(scope_key, [])),
+            "source_currency": request.source_currency,
+        }
+
+    errors = list(fetch_errors.values()) + normalization_errors
+    output = {
+        "command": RECENT_TRADES_BRONZE_BUILDER_COMMAND,
+        "exchange": cast(str, args.exchange),
+        "dataset_type": RECENT_TRADE_DATASET_TYPE,
+        "run_id": run_id,
+        "snapshot_time": snapshot_time.isoformat().replace("+00:00", "Z"),
+        "requested_currencies": currencies,
+        "kinds": kinds,
+        "count": count,
+        "start_timestamp": start_timestamp,
+        "sorting": cast(str, args.sorting),
+        "scope_results": scope_results,
+        "rows_written": len(all_rows),
+        "output_files": output_files,
+        "errors": errors,
+    }
+    _emit_json_output(bool(args.json_output), output)
+    _log_job_event(
+        logger,
+        logging.INFO,
+        RECENT_TRADES_BRONZE_BUILDER_COMMAND,
+        "run_summary",
+        currencies=currencies,
+        elapsed_s=perf_counter() - started_at,
+        errors=len(errors),
+        files=len(output_files),
+        kinds=kinds,
+        rows_written=len(all_rows),
+        run_id=run_id,
+        snapshot_time=output["snapshot_time"],
+        status="complete" if not errors else "partial",
+    )
+
+
 def _valid_top_of_book(snapshot: RawSnapshot) -> bool:
     """Return whether snapshot top-of-book values are present and ordered."""
 
@@ -1200,6 +1446,11 @@ def _handle_index_price_bronze_builder(args: argparse.Namespace, logger: logging
     _run_index_price_bronze_builder(args=args, logger=logger)
 
 
+def _handle_recent_trades_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    _ = config
+    _run_recent_trades_bronze_builder(args=args, logger=logger)
+
+
 def _handle_validate_symbols(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
     _ = config
     _run_validate_symbols(args=args, logger=logger)
@@ -1214,6 +1465,7 @@ def command_handlers() -> dict[str, CommandHandler]:
         OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND: _handle_option_instrument_ticker_bronze_builder,
         INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND: _handle_instrument_metadata_bronze_builder,
         INDEX_PRICE_BRONZE_BUILDER_COMMAND: _handle_index_price_bronze_builder,
+        RECENT_TRADES_BRONZE_BUILDER_COMMAND: _handle_recent_trades_bronze_builder,
         VALIDATE_SYMBOLS_COMMAND: _handle_validate_symbols,
     }
 

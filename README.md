@@ -28,6 +28,7 @@ Author: Sergej Schweizer
   - [4.3 Option Instrument Ticker (`dataset_type=option_instrument_ticker_snapshot_1m`)](#43-option-instrument-ticker-dataset_typeoption_instrument_ticker_snapshot_1m)
   - [4.4 Instrument Metadata (`dataset_type=instrument_metadata_snapshot_daily`)](#44-instrument-metadata-dataset_typeinstrument_metadata_snapshot_daily)
   - [4.5 Index Price (`dataset_type=index_price_snapshot_1m`)](#45-index-price-dataset_typeindex_price_snapshot_1m)
+  - [4.6 Recent Trade Tape (`dataset_type=recent_trade_snapshot_1m`)](#46-recent-trade-tape-dataset_typerecent_trade_snapshot_1m)
 - [5. Storage Layout](#5-storage-layout)
 - [6. Configuration Model](#6-configuration-model)
 - [7. Example Commands](#7-example-commands)
@@ -102,6 +103,7 @@ Options:
 |---|---|---|---|---|---|
 | `options-bronze-builder` | `options_ticker_snapshot_1m` | `option` | `BTC ETH SOL` | `public/get_book_summary_by_currency` | Broad option-chain summary rows |
 | `option-instrument-ticker-bronze-builder` | `option_instrument_ticker_snapshot_1m` | `option` | `BTC ETH SOL` | `public/ticker` | Selected per-option IV, bid/ask IV, and Greeks |
+| `recent-trades-bronze-builder` | `recent_trade_snapshot_1m` | `option`, `future`, `perp` | `BTC ETH SOL` | `public/get_last_trades_by_currency` | Recent trade tape for options, futures, and perpetuals |
 | `instrument-metadata-bronze-builder` | `instrument_metadata_snapshot_daily` | `option` | `BTC ETH SOL` | `public/get_instruments` | Active option metadata snapshots |
 
 Index State:
@@ -226,12 +228,14 @@ For an IV/RV research feed, run the Bronze collectors in this order:
 python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind option
 python main.py options-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
 python main.py option-instrument-ticker-bronze-builder --debug --symbols BTC ETH SOL --max-instruments-per-run 20
+python main.py recent-trades-bronze-builder --debug --symbols BTC ETH SOL --kinds option future --count 1000
 python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
 ```
 
 The metadata job captures the active option universe, the options summary job provides broad chain
-liquidity context, and the per-instrument ticker job captures the selected IV/Greeks panel used by
-downstream surface builders.
+liquidity context, the per-instrument ticker job captures the selected IV/Greeks panel, and the
+recent trade job captures signed flow and jump/volume-shock inputs used by downstream surface
+builders.
 
 ---
 
@@ -405,6 +409,43 @@ Key fields:
 | `event_time` | Exchange event timestamp when available |
 | `snapshot_time` | Collector minute timestamp |
 
+## 4.6 Recent Trade Tape (`dataset_type=recent_trade_snapshot_1m`)
+
+### 1. Bronze Layer
+
+Market role: raw public trade tape for realized volatility, jump detection, signed flow, trade
+imbalance, option trade IV, liquidation context, and volume-shock features.
+
+Endpoint: `GET /api/v2/public/get_last_trades_by_currency`
+
+Default command:
+
+```bash
+python main.py recent-trades-bronze-builder --debug --symbols BTC ETH SOL --kinds option future --count 1000
+```
+
+Coverage policy:
+
+- Fetches BTC, ETH, and SOL trade tape for `kind=option` and `kind=future`.
+- Uses Deribit `future` kind for both dated futures and perpetual instruments.
+- Maps logical SOL to Deribit `currency=USDC` and keeps only `SOL_USDC-*` instruments.
+- Uses `sorting=asc` and a configurable overlap window from `snapshot_time - lookback_seconds`.
+- Fetches sequentially by currency/kind; there is no parallel REST fan-out.
+- Relies on parquet upsert by `exchange`, `instrument_name`, and `trade_id` to dedupe overlap
+  windows and make minute cron retries restart-safe.
+
+Key fields:
+
+| Column | Market Meaning |
+|---|---|
+| `trade_id`, `trade_sequence`, `instrument_name` | Trade identity and exchange ordering |
+| `requested_currency`, `source_currency`, `currency`, `kind`, `instrument_type` | Logical and Deribit source scope, including SOL/USDC mapping |
+| `exchange_timestamp`, `snapshot_time`, `ingested_at`, `run_id` | Exchange event time and ingestion lineage |
+| `price`, `amount`, `direction`, `tick_direction` | Raw trade price, size, taker direction, and tick movement |
+| `signed_amount`, `notional` | Derived signed flow and price-times-amount notional |
+| `mark_price`, `index_price`, `iv` | Model context for futures/perps and option trade IV |
+| `liquidation`, `block_trade_id`, `raw_payload_hash` | Liquidation/block context and replay checksum |
+
 ---
 
 # 5. Storage Layout
@@ -423,6 +464,8 @@ lake/bronze/
     exchange=<exchange>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
   dataset_type=index_price_snapshot_1m/
     exchange=<exchange>/index_name=<index_name>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
+  dataset_type=recent_trade_snapshot_1m/
+    exchange=<exchange>/instrument_type=<option|future|perp>/currency=<currency>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
 ```
 
 Partitioning uses explicit `year=YYYY/month=MM/date=DD/hour=HH` directories. Writers upsert into one
@@ -448,6 +491,7 @@ Key controls:
 | Option instrument ticker | `ingestion.option_instrument_ticker.*` |
 | Instrument metadata | `ingestion.instrument_metadata.*` |
 | Index price | `ingestion.index_price.*` |
+| Recent trades | `ingestion.recent_trades.*` |
 
 Important behavior:
 
@@ -457,7 +501,10 @@ Important behavior:
 - REST calls are sequential and bounded by HTTP timeout/retry settings.
 - `ingestion.option_instrument_ticker.max_instruments_per_run` caps the selected universe per
   currency for each minute run.
-- Cron should use `flock` for the per-instrument ticker command to avoid overlapping ticker runs.
+- `ingestion.recent_trades.lookback_seconds` controls the restart-safe overlap window for recent
+  trade collection.
+- Cron should use `flock` for per-instrument ticker and recent-trade commands to avoid overlapping
+  minute runs.
 
 ---
 
@@ -469,6 +516,7 @@ Important behavior:
 python main.py l2-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
 python main.py options-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
 python main.py option-instrument-ticker-bronze-builder --debug --symbols BTC ETH SOL --max-instruments-per-run 20
+python main.py recent-trades-bronze-builder --debug --symbols BTC ETH SOL --kinds option future --count 1000
 python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind option
 python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
 ```
@@ -485,6 +533,7 @@ python main.py validate-symbols --debug --symbols BTC ETH SOL
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py l2-bronze-builder --debug --symbols BTC ETH SOL
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-bronze-builder --debug --symbols BTC ETH SOL
 * * * * * cd /home/vcs/git/crypto-live-loader && flock -n .logs/option-instrument-ticker-bronze-builder.cron.lock .venv/bin/python main.py option-instrument-ticker-bronze-builder --debug --symbols BTC ETH SOL --max-instruments-per-run 20
+* * * * * cd /home/vcs/git/crypto-live-loader && flock -n .logs/recent-trades-bronze-builder.cron.lock .venv/bin/python main.py recent-trades-bronze-builder --debug --symbols BTC ETH SOL --kinds option future --count 1000
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
 15 3 * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind option
 ```
@@ -525,6 +574,7 @@ Upsert-based datasets merge by natural keys and deterministic sort order:
 | `option_instrument_ticker_snapshot_1m` | `exchange`, `instrument_name`, `source`, `snapshot_time` |
 | `instrument_metadata_snapshot_daily` | `exchange`, `instrument_name`, `snapshot_date` |
 | `index_price_snapshot_1m` | `exchange`, `index_name`, `event_time`, `source` |
+| `recent_trade_snapshot_1m` | `exchange`, `instrument_name`, `trade_id` |
 
 ## 8.2 Observability and Logging
 
@@ -544,8 +594,10 @@ Built-in validation and normalization behavior:
 - `validate-symbols` checks symbol normalization and top-of-book sanity.
 - Option normalizers reject malformed option instrument names.
 - SOL option ingestion filters Deribit `USDC` option responses to `SOL_USDC-*`.
+- SOL trade ingestion filters Deribit `USDC` trade responses to `SOL_USDC-*`.
 - Per-instrument ticker selection requires usable quote, mark, or liquidity information before a
   contract enters the IV/RV prediction universe.
+- Recent trade overlap windows are deduped by trade id during parquet upsert.
 - Per-instrument ticker rows preserve raw payload hashes for audit and replay.
 - External calls are bounded by configured timeout and retry settings.
 
