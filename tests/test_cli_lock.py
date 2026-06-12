@@ -13,19 +13,10 @@ import pytest
 from api import cli
 from api.constants import (
     BRONZE_BUILDER_COMMAND,
-    GOLD_BUILDER_COMMAND,
     INDEX_PRICE_BRONZE_BUILDER_COMMAND,
-    INDEX_PRICE_GOLD_BUILDER_COMMAND,
-    INDEX_PRICE_SILVER_BUILDER_COMMAND,
     INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
-    INSTRUMENT_METADATA_GOLD_BUILDER_COMMAND,
-    INSTRUMENT_METADATA_SILVER_BUILDER_COMMAND,
-    LEGACY_GOLD_BUILDER_COMMAND,
-    LEGACY_SILVER_BUILDER_COMMAND,
     OPTIONS_BRONZE_BUILDER_COMMAND,
-    OPTIONS_GOLD_BUILDER_COMMAND,
-    OPTIONS_SILVER_BUILDER_COMMAND,
-    SILVER_BUILDER_COMMAND,
+    VALIDATE_SYMBOLS_COMMAND,
 )
 from api.runtime import configure_logging
 from domain.models import OrderLevel, RawSnapshot
@@ -51,8 +42,6 @@ def _config(
     max_runtime_s: float = 50.0,
     save_parquet_lake: bool = False,
     lake_root: str = "lake/bronze",
-    silver_lake_root: str = "lake/silver",
-    gold_lake_root: str = "lake/gold",
     json_output: bool = True,
 ) -> Config:
     """Build a minimal test config."""
@@ -78,8 +67,6 @@ def _config(
             "max_runtime_s": max_runtime_s,
             "save_parquet_lake": save_parquet_lake,
             "lake_root": lake_root,
-            "silver_lake_root": silver_lake_root,
-            "gold_lake_root": gold_lake_root,
             "json_output": json_output,
         },
     }
@@ -183,7 +170,7 @@ def test_job_event_logs_use_uniform_key_value_shape(caplog: pytest.LogCaptureFix
 
 
 def test_cron_layer_commands_accept_debug_flag() -> None:
-    """Verify every scheduled Bronze, Silver, and Gold command accepts --debug."""
+    """Verify every scheduled Bronze command accepts --debug."""
 
     parser = cli.build_parser(_config())
     commands = [
@@ -191,20 +178,6 @@ def test_cron_layer_commands_accept_debug_flag() -> None:
         [OPTIONS_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL"],
         [INDEX_PRICE_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "btc_usd", "eth_usd", "sol_usdc"],
         [INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL", "--kind", "option"],
-        [SILVER_BUILDER_COMMAND, "--debug", "--no-plot", "--no-manifest"],
-        [OPTIONS_SILVER_BUILDER_COMMAND, "--debug", "--no-plot", "--no-manifest"],
-        [INSTRUMENT_METADATA_SILVER_BUILDER_COMMAND, "--debug"],
-        [INDEX_PRICE_SILVER_BUILDER_COMMAND, "--debug"],
-        [GOLD_BUILDER_COMMAND, "--debug", "--no-plot", "--no-manifest", "--fill-missing-minutes"],
-        [OPTIONS_GOLD_BUILDER_COMMAND, "--debug", "--no-plot", "--no-manifest", "--fill-missing-minutes"],
-        [
-            INSTRUMENT_METADATA_GOLD_BUILDER_COMMAND,
-            "--debug",
-            "--no-plot",
-            "--no-manifest",
-            "--fill-missing-minutes",
-        ],
-        [INDEX_PRICE_GOLD_BUILDER_COMMAND, "--debug", "--no-plot", "--no-manifest", "--fill-missing-minutes"],
     ]
 
     parsed = [parser.parse_args(command) for command in commands]
@@ -231,55 +204,56 @@ def test_l2_symbols_accept_comma_delimited_cli_values() -> None:
     assert cli._normalize_cli_symbols(args.symbols) == ["BTC", "ETH", "SOL"]
 
 
-def test_silver_builder_parser_defaults_can_come_from_config() -> None:
-    """Verify silver-builder defaults are configurable through config."""
+def test_cli_normalizers_reject_empty_values() -> None:
+    """Verify CLI list normalizers fail clearly on empty inputs."""
 
-    args = cli.build_parser(
-        _config(
-            levels=25,
-            lake_root="custom/bronze",
-            silver_lake_root="custom/silver",
-            json_output=False,
-        )
-    ).parse_args([SILVER_BUILDER_COMMAND])
-
-    assert args.bronze_lake_root == "custom/bronze"
-    assert args.silver_lake_root == "custom/silver"
-    assert args.depth == 25
-    assert args.json_output is False
+    with pytest.raises(ValueError, match="at least one symbol"):
+        cli._normalize_cli_symbols(["", ","])
+    with pytest.raises(ValueError, match="at least one currency"):
+        cli._normalize_cli_currencies(["", ","])
+    with pytest.raises(ValueError, match="at least one index symbol"):
+        cli._normalize_cli_index_symbols(["", ","])
 
 
-def test_l2_silver_builder_legacy_alias_is_still_accepted() -> None:
-    """Verify the legacy silver-builder alias still parses."""
+def test_debug_logging_updates_logger_and_handlers() -> None:
+    """Verify debug mode lifts both logger and handler levels."""
 
-    args = cli.build_parser().parse_args([LEGACY_SILVER_BUILDER_COMMAND])
-    assert args.command == LEGACY_SILVER_BUILDER_COMMAND
+    logger = logging.getLogger("test_debug_logging_updates_logger_and_handlers")
+    handler = logging.StreamHandler()
+    logger.addHandler(handler)
+    try:
+        logger.setLevel(logging.INFO)
+        handler.setLevel(logging.INFO)
+        cli._enable_debug_logging(cli.build_parser().parse_args([BRONZE_BUILDER_COMMAND, "--debug"]), logger)
 
-
-def test_gold_builder_parser_defaults_can_come_from_config() -> None:
-    """Verify gold-builder defaults are configurable through config."""
-
-    args = cli.build_parser(
-        _config(
-            silver_lake_root="custom/silver",
-            gold_lake_root="custom/gold",
-            json_output=False,
-        )
-    ).parse_args([GOLD_BUILDER_COMMAND])
-
-    assert args.silver_lake_root == "custom/silver"
-    assert args.gold_lake_root == "custom/gold"
-    assert args.expected_snapshots_per_minute == 6
-    assert args.completeness_threshold == 0.8
-    assert args.fill_policy == "neighbor"
-    assert args.json_output is False
+        assert logger.level == logging.DEBUG
+        assert handler.level == logging.DEBUG
+    finally:
+        logger.removeHandler(handler)
+        handler.close()
 
 
-def test_l2_gold_builder_legacy_alias_is_still_accepted() -> None:
-    """Verify the legacy gold-builder alias still parses."""
+def test_persist_bronze_snapshots_reports_parquet_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify Bronze parquet failures are surfaced in command output."""
 
-    args = cli.build_parser().parse_args([LEGACY_GOLD_BUILDER_COMMAND])
-    assert args.command == LEGACY_GOLD_BUILDER_COMMAND
+    def raise_parquet_error(**_: object) -> list[str]:
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(cli, "save_l2_snapshot_parquet_lake", raise_parquet_error)
+    output: dict[str, object] = {}
+
+    files, error = cli._persist_bronze_snapshots(
+        snapshots_by_symbol={},
+        lake_root="lake/bronze",
+        depth=50,
+        enabled=True,
+        output=output,
+        logger=logging.getLogger("test_persist_bronze_snapshots_reports_parquet_errors"),
+    )
+
+    assert files == []
+    assert error == "disk full"
+    assert output["_parquet_error"] == "disk full"
 
 
 def test_warn_for_long_poll_schedule_logs_cron_overlap(caplog: pytest.LogCaptureFixture) -> None:
@@ -296,6 +270,22 @@ def test_warn_for_long_poll_schedule_logs_cron_overlap(caplog: pytest.LogCapture
         )
 
     assert "cron runs may overlap" in caplog.text
+
+
+def test_warn_for_long_poll_schedule_logs_runtime_budget(caplog: pytest.LogCaptureFixture) -> None:
+    """Verify polling schedules warn when estimated sleep exceeds runtime budget."""
+
+    logger = logging.getLogger("test_l2_runtime_budget_warning")
+
+    with caplog.at_level("WARNING", logger=logger.name):
+        cli._warn_for_long_poll_schedule(
+            logger=logger,
+            snapshot_count=5,
+            poll_interval_s=20,
+            max_runtime_s=50,
+        )
+
+    assert "may exceed max runtime" in caplog.text
 
 
 def test_validate_symbols_reports_valid_books(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -333,6 +323,39 @@ def test_validate_symbols_reports_valid_books(monkeypatch: pytest.MonkeyPatch) -
     assert result["normalized_symbol"] == "SOL_USDC-PERPETUAL"
     assert result["valid_book"] is True
     assert result["error"] is None
+
+
+def test_validate_symbols_reports_fetch_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify symbol validation returns actionable errors for failed fetches."""
+
+    class Adapter:
+        @property
+        def source_name(self) -> str:
+            return "deribit"
+
+        def normalize_symbol(self, symbol: str) -> str:
+            return f"{symbol}-PERPETUAL"
+
+        def fetch_snapshot(self, symbol: str, depth: int) -> RawSnapshot:
+            _ = symbol, depth
+            raise RuntimeError("boom")
+
+    monkeypatch.setattr(cli, "source_adapter_for_exchange", lambda exchange: Adapter())
+
+    result = cli._validate_symbol(exchange="deribit", symbol="BTC", depth=1)
+
+    assert result["normalized_symbol"] == "BTC-PERPETUAL"
+    assert result["valid_book"] is False
+    assert result["error"] == "boom"
+
+
+def test_run_validate_symbols_rejects_non_positive_depth() -> None:
+    """Verify validate-symbols rejects invalid depth before fetching."""
+
+    args = cli.build_parser().parse_args([VALIDATE_SYMBOLS_COMMAND, "--levels", "0"])
+
+    with pytest.raises(ValueError, match="levels must be positive"):
+        cli._run_validate_symbols(args=args, logger=logging.getLogger("test_run_validate_symbols_rejects_depth"))
 
 
 def test_main_validate_symbols_outputs_json(
@@ -465,325 +488,3 @@ def test_main_loader_l2_persists_raw_snapshots_to_lake(
     assert output["_parquet_files"] == ["/tmp/lake/bronze/dataset_type=l2_snapshot/data.parquet"]
     assert calls[0]["snapshots_by_symbol"] == {"BTC": [snapshot]}
     assert calls[0]["depth"] == 50
-
-
-def test_main_silver_builder_outputs_written_files(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Verify silver-builder runs the Bronze-to-Silver transform."""
-
-    calls: list[dict[str, object]] = []
-    artifact_files = [
-        "/tmp/lake/silver/dataset_type=l2_snapshot_features/month=2026-05/2026-05.parquet",
-        "/tmp/lake/silver/dataset_type=l2_snapshot_features/month=2026-05/2026-05.json",
-        "/tmp/lake/silver/dataset_type=l2_snapshot_features/month=2026-05/2026-05.png",
-    ]
-
-    def fake_transform_l2_bronze_to_silver(**kwargs: object) -> list[str]:
-        calls.append(kwargs)
-        return artifact_files
-
-    monkeypatch.setattr(cli, "transform_l2_bronze_to_silver", fake_transform_l2_bronze_to_silver)
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "main.py",
-            SILVER_BUILDER_COMMAND,
-            "--bronze-lake-root",
-            "custom/bronze",
-            "--silver-lake-root",
-            "custom/silver",
-            "--depth",
-            "50",
-        ],
-    )
-
-    cli.main()
-
-    output = json.loads(capsys.readouterr().out)
-    assert output["command"] == SILVER_BUILDER_COMMAND
-    assert output["artifact_files"] == artifact_files
-    assert calls == [
-        {
-            "bronze_lake_root": "custom/bronze",
-            "silver_lake_root": "custom/silver",
-            "depth": 50,
-            "plot": True,
-            "manifest": True,
-        }
-    ]
-
-
-def test_main_silver_builder_respects_plot_and_manifest_flags(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Verify silver-builder passes plot and manifest flags through to the transform."""
-
-    calls: list[dict[str, object]] = []
-    artifact_files = ["/tmp/lake/silver/dataset_type=l2_snapshot_features/month=2026-05/2026-05.parquet"]
-
-    def fake_transform_l2_bronze_to_silver(**kwargs: object) -> list[str]:
-        calls.append(kwargs)
-        return artifact_files
-
-    monkeypatch.setattr(cli, "transform_l2_bronze_to_silver", fake_transform_l2_bronze_to_silver)
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "main.py",
-            SILVER_BUILDER_COMMAND,
-            "--bronze-lake-root",
-            "custom/bronze",
-            "--silver-lake-root",
-            "custom/silver",
-            "--depth",
-            "50",
-            "--no-plot",
-            "--no-manifest",
-        ],
-    )
-
-    cli.main()
-
-    assert calls == [
-        {
-            "bronze_lake_root": "custom/bronze",
-            "silver_lake_root": "custom/silver",
-            "depth": 50,
-            "plot": False,
-            "manifest": False,
-        }
-    ]
-
-
-def test_main_gold_builder_outputs_artifact_files(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Verify gold-builder runs the Silver-to-Gold transform."""
-
-    calls: list[dict[str, object]] = []
-
-    def fake_transform_l2_silver_to_gold(**kwargs: object) -> list[str]:
-        calls.append(kwargs)
-        return ["/tmp/lake/gold/BTC_hash_commit.parquet"]
-
-    monkeypatch.setattr(cli, "transform_l2_silver_to_gold", fake_transform_l2_silver_to_gold)
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "main.py",
-            GOLD_BUILDER_COMMAND,
-            "--silver-lake-root",
-            "custom/silver",
-            "--gold-lake-root",
-            "custom/gold",
-            "--expected-snapshots-per-minute",
-            "6",
-            "--completeness-threshold",
-            "0.8",
-        ],
-    )
-
-    cli.main()
-
-    output = json.loads(capsys.readouterr().out)
-    assert output["command"] == GOLD_BUILDER_COMMAND
-    assert output["artifact_files"] == ["/tmp/lake/gold/BTC_hash_commit.parquet"]
-    assert calls == [
-        {
-            "silver_lake_root": "custom/silver",
-            "gold_lake_root": "custom/gold",
-            "expected_snapshots_per_minute": 6,
-            "completeness_threshold": 0.8,
-            "plot": True,
-            "manifest": True,
-            "fill_missing_minutes": False,
-            "fill_policy": "neighbor",
-        }
-    ]
-
-
-def test_main_gold_builder_respects_plot_and_manifest_flags(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Verify gold-builder passes plot and manifest flags through to the transform."""
-
-    calls: list[dict[str, object]] = []
-
-    def fake_transform_l2_silver_to_gold(**kwargs: object) -> list[str]:
-        calls.append(kwargs)
-        return ["/tmp/lake/gold/BTC_hash_commit.parquet"]
-
-    monkeypatch.setattr(cli, "transform_l2_silver_to_gold", fake_transform_l2_silver_to_gold)
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "main.py",
-            GOLD_BUILDER_COMMAND,
-            "--silver-lake-root",
-            "custom/silver",
-            "--gold-lake-root",
-            "custom/gold",
-            "--expected-snapshots-per-minute",
-            "6",
-            "--completeness-threshold",
-            "0.8",
-            "--fill-missing-minutes",
-            "--no-plot",
-            "--no-manifest",
-        ],
-    )
-
-    cli.main()
-
-    assert calls == [
-        {
-            "silver_lake_root": "custom/silver",
-            "gold_lake_root": "custom/gold",
-            "expected_snapshots_per_minute": 6,
-            "completeness_threshold": 0.8,
-            "plot": False,
-            "manifest": False,
-            "fill_missing_minutes": True,
-            "fill_policy": "neighbor",
-        }
-    ]
-
-
-def test_main_gold_builder_passes_hybrid_fill_policy(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Verify gold-builder forwards the hybrid fill policy to the transform."""
-
-    calls: list[dict[str, object]] = []
-
-    def fake_transform_l2_silver_to_gold(**kwargs: object) -> list[str]:
-        calls.append(kwargs)
-        return ["/tmp/lake/gold/BTC_hash_commit.parquet"]
-
-    monkeypatch.setattr(cli, "transform_l2_silver_to_gold", fake_transform_l2_silver_to_gold)
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "main.py",
-            GOLD_BUILDER_COMMAND,
-            "--silver-lake-root",
-            "custom/silver",
-            "--gold-lake-root",
-            "custom/gold",
-            "--fill-missing-minutes",
-            "--fill-policy",
-            "hybrid",
-        ],
-    )
-
-    cli.main()
-    _ = capsys.readouterr().out
-
-    assert calls == [
-        {
-            "silver_lake_root": "custom/silver",
-            "gold_lake_root": "custom/gold",
-            "expected_snapshots_per_minute": 6,
-            "completeness_threshold": 0.8,
-            "plot": True,
-            "manifest": True,
-            "fill_missing_minutes": True,
-            "fill_policy": "hybrid",
-        }
-    ]
-
-
-def test_main_gold_builder_passes_kalman_fill_policy(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Verify gold-builder forwards the kalman fill policy to the transform."""
-
-    calls: list[dict[str, object]] = []
-
-    def fake_transform_l2_silver_to_gold(**kwargs: object) -> list[str]:
-        calls.append(kwargs)
-        return ["/tmp/lake/gold/BTC_hash_commit.parquet"]
-
-    monkeypatch.setattr(cli, "transform_l2_silver_to_gold", fake_transform_l2_silver_to_gold)
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "main.py",
-            GOLD_BUILDER_COMMAND,
-            "--silver-lake-root",
-            "custom/silver",
-            "--gold-lake-root",
-            "custom/gold",
-            "--fill-missing-minutes",
-            "--fill-policy",
-            "kalman",
-        ],
-    )
-
-    cli.main()
-    _ = capsys.readouterr().out
-
-    assert calls == [
-        {
-            "silver_lake_root": "custom/silver",
-            "gold_lake_root": "custom/gold",
-            "expected_snapshots_per_minute": 6,
-            "completeness_threshold": 0.8,
-            "plot": True,
-            "manifest": True,
-            "fill_missing_minutes": True,
-            "fill_policy": "kalman",
-        }
-    ]
-
-
-def test_main_gold_builder_debug_enables_debug_logging(
-    monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
-) -> None:
-    """Verify l2-gold-builder accepts --debug without changing transform contracts."""
-
-    calls: list[dict[str, object]] = []
-
-    def fake_transform_l2_silver_to_gold(**kwargs: object) -> list[str]:
-        calls.append(kwargs)
-        return []
-
-    monkeypatch.setattr(cli, "transform_l2_silver_to_gold", fake_transform_l2_silver_to_gold)
-    monkeypatch.setattr(
-        "sys.argv",
-        [
-            "main.py",
-            GOLD_BUILDER_COMMAND,
-            "--silver-lake-root",
-            "custom/silver",
-            "--gold-lake-root",
-            "custom/gold",
-            "--debug",
-        ],
-    )
-
-    cli.main()
-    _ = capsys.readouterr()
-
-    logger = logging.getLogger("crypto_live_loader.l2-gold-builder")
-    assert logger.level == logging.DEBUG
-    assert calls == [
-        {
-            "silver_lake_root": "custom/silver",
-            "gold_lake_root": "custom/gold",
-            "expected_snapshots_per_minute": 6,
-            "completeness_threshold": 0.8,
-            "plot": True,
-            "manifest": True,
-            "fill_missing_minutes": False,
-            "fill_policy": "neighbor",
-        }
-    ]
