@@ -1,129 +1,469 @@
-# crypto-live-loader
+# CRYPTO-LIVE-LOADER
 
-Deterministic Deribit Bronze market-data ingestion for quantitative research and production analytics.
+Production-grade Deribit live market-data ingestion framework for Bronze parquet snapshots used in
+quantitative research, IV/RV monitoring, and operational analytics.
 
-## Table of Contents
-- [1. Executive Summary](#1-executive-summary)
-- [2. System Scope and Guarantees](#2-system-scope-and-guarantees)
-- [3. Data Lineage](#3-data-lineage)
-- [4. Architecture](#4-architecture)
-- [5. Environment and Installation](#5-environment-and-installation)
+Author: Sergej Schweizer
+
+---
+
+# Table Of Contents
+
+- [CRYPTO-LIVE-LOADER](#crypto-live-loader)
+- [Table Of Contents](#table-of-contents)
+- [1. System Overview](#1-system-overview)
+  - [1.1 Core Design Principles](#11-core-design-principles)
+  - [1.2 Bronze-Only Architecture](#12-bronze-only-architecture)
+  - [1.3 Supported Live Data Domains](#13-supported-live-data-domains)
+    - [Domain Groups](#domain-groups)
+    - [CLI Contract](#cli-contract)
+- [2. Repository Structure](#2-repository-structure)
+- [3. Installation](#3-installation)
+  - [3.1 System Prerequisites](#31-system-prerequisites)
+  - [3.2 Python Environment Setup](#32-python-environment-setup)
+  - [3.3 Quick Start](#33-quick-start)
+- [4. Bronze Datasets](#4-bronze-datasets)
+  - [4.1 L2 Order Book (`dataset_type=l2_snapshot`)](#41-l2-order-book-dataset_typel2_snapshot)
+  - [4.2 Options Summary (`dataset_type=options_ticker_snapshot_1m`)](#42-options-summary-dataset_typeoptions_ticker_snapshot_1m)
+  - [4.3 Option Instrument Ticker (`dataset_type=option_instrument_ticker_snapshot_1m`)](#43-option-instrument-ticker-dataset_typeoption_instrument_ticker_snapshot_1m)
+  - [4.4 Instrument Metadata (`dataset_type=instrument_metadata_snapshot_daily`)](#44-instrument-metadata-dataset_typeinstrument_metadata_snapshot_daily)
+  - [4.5 Index Price (`dataset_type=index_price_snapshot_1m`)](#45-index-price-dataset_typeindex_price_snapshot_1m)
+- [5. Storage Layout](#5-storage-layout)
 - [6. Configuration Model](#6-configuration-model)
-- [7. CLI Runbook](#7-cli-runbook)
-- [8. Dataset Specifications](#8-dataset-specifications)
-- [9. Idempotency](#9-idempotency)
-- [10. Data Quality and Validation](#10-data-quality-and-validation)
-- [11. Observability and Logging](#11-observability-and-logging)
-- [12. Scheduling and Overnight Operations](#12-scheduling-and-overnight-operations)
-- [13. Quality Gates](#13-quality-gates)
-- [14. Risk Notes and Limitations](#14-risk-notes-and-limitations)
-- [15. Roadmap](#15-roadmap)
+- [7. Example Commands](#7-example-commands)
+  - [7.1 Bronze Collectors](#71-bronze-collectors)
+  - [7.2 Validation Utility](#72-validation-utility)
+  - [7.3 Production Cron](#73-production-cron)
+  - [7.4 Quality Checks](#74-quality-checks)
+- [8. Operations](#8-operations)
+  - [8.1 Idempotency](#81-idempotency)
+  - [8.2 Observability and Logging](#82-observability-and-logging)
+  - [8.3 Data Quality](#83-data-quality)
+- [9. Risk Notes and Limitations](#9-risk-notes-and-limitations)
+- [10. Roadmap](#10-roadmap)
 
-## 1. Executive Summary
+---
 
-`crypto-live-loader` provides a reproducible Bronze-only market-data ingestion stack centered on Deribit public REST endpoints.
+# 1. System Overview
+
+`crypto-live-loader` ingests live Deribit public REST market data into a deterministic local Bronze
+lake. The repository is intentionally focused on raw, restart-safe capture. It does not build Silver
+or Gold feature layers.
 
 Primary use cases:
-- Build and maintain continuous raw market-history snapshots.
-- Persist raw L2, options ticker, instrument metadata, and index-price records.
-- Keep raw lake writes deterministic, idempotent, and restart-safe.
 
-## 2. System Scope and Guarantees
+- Maintain minute-level raw Deribit market snapshots for BTC, ETH, and SOL.
+- Capture L2 order-book state, option summary rows, per-option Greeks/IV, instrument metadata, and
+  index prices.
+- Provide stable Bronze inputs for downstream IV/RV forecasting, research joins, and incident
+  replay.
 
-In scope:
-- Deribit L2 perpetual order-book ingestion (`l2_snapshot`).
-- Deribit options ticker-chain ingestion (`options_ticker_snapshot_1m`).
-- Deribit instrument metadata ingestion (`instrument_metadata_snapshot_daily`).
-- Deribit index-price ingestion (`index_price_snapshot_1m`).
+## 1.1 Core Design Principles
 
-Operational guarantees:
-- Deterministic partitioning and typed normalization.
-- Idempotent upsert semantics for Bronze parquet files.
-- Bounded runtime settings and sequential REST fetching for scheduled collectors.
-- Explicit debug logging for every CLI command.
+The repository follows the engineering principles defined in `AGENTS.md`:
 
-Out of scope:
-- Exchange private endpoints.
-- Tick-stream websocket collectors.
-- Derived feature, aggregation, or artifact layers.
-- Remote metadata catalogs and distributed locking.
+- maintainability
+- modularity
+- reproducibility
+- deterministic processing
+- idempotent ingestion
+- explicit interfaces
+- restart-safe operational behavior
 
-## 3. Data Lineage
+## 1.2 Bronze-Only Architecture
+
+The system persists source-facing records directly into Bronze parquet partitions. Every collector
+normalizes response payloads into typed rows, writes them with deterministic natural keys, and keeps
+external side effects behind explicit source and lake adapters.
 
 ```text
-Deribit REST endpoints
-  -> Bronze raw snapshots (partitioned parquet)
+Deribit public REST endpoints
+  -> source fetchers
+  -> typed Bronze normalizers
+  -> idempotent parquet upserts
+  -> lake/bronze
 ```
 
-Endpoint lineage:
-- `public/get_order_book` -> `l2_snapshot`
-- `public/get_book_summary_by_currency` -> `options_ticker_snapshot_1m`
-- `public/get_instruments` -> `instrument_metadata_snapshot_daily`
-- `public/get_index_price` -> `index_price_snapshot_1m`
+Silver and Gold functionality is intentionally out of scope for this repository.
 
-## 4. Architecture
+## 1.3 Supported Live Data Domains
+
+### Domain Groups
+
+Order Book:
+
+| CLI Command | Bronze `dataset_type` | Instrument Type | Default Symbols | Source Endpoint | Description |
+|---|---|---|---|---|---|
+| `l2-bronze-builder` | `l2_snapshot` | `perp` | `BTC ETH SOL` | `public/get_order_book` | Raw perpetual order-book snapshots |
+
+Options:
+
+| CLI Command | Bronze `dataset_type` | Instrument Type | Default Symbols | Source Endpoint | Description |
+|---|---|---|---|---|---|
+| `options-bronze-builder` | `options_ticker_snapshot_1m` | `option` | `BTC ETH SOL` | `public/get_book_summary_by_currency` | Broad option-chain summary rows |
+| `option-instrument-ticker-bronze-builder` | `option_instrument_ticker_snapshot_1m` | `option` | `BTC ETH SOL` | `public/ticker` | Selected per-option IV, bid/ask IV, and Greeks |
+| `instrument-metadata-bronze-builder` | `instrument_metadata_snapshot_daily` | `option` | `BTC ETH SOL` | `public/get_instruments` | Active option metadata snapshots |
+
+Index State:
+
+| CLI Command | Bronze `dataset_type` | Instrument Type | Default Symbols | Source Endpoint | Description |
+|---|---|---|---|---|---|
+| `index-price-bronze-builder` | `index_price_snapshot_1m` | `index` | `btc_usd eth_usd sol_usdc` | `public/get_index_price` | Raw Deribit index-price observations |
+
+### CLI Contract
+
+- `--symbols` and `--currencies` are aliases for option currency inputs.
+- Logical `SOL` option requests map to Deribit `USDC` option summaries and filter `SOL_USDC-*`
+  instruments.
+- All Bronze writers default to `lake/bronze` unless overridden with `--lake-root`.
+- Every command supports `--debug` for verbose operational logs.
+
+Current exchange support:
+
+- Deribit
+
+Primary assets:
+
+- BTC
+- ETH
+- SOL
+
+---
+
+# 2. Repository Structure
 
 ```text
 api/
-  cli.py         command parsing, orchestration, output contracts
-  runtime.py     logging and runtime settings
-  constants.py   command names
-
-ingestion/
-  * bronze normalizers/writers
-  * parquet repository and file locking
-  * runtime configuration
-
 domain/
-  source contracts and typed models
-
+ingestion/
 sources/
-  Deribit fetchers and adapter wiring
+scripts/
+tests/
+lake/
+config.yaml
+pyproject.toml
+main.py
+README.md
+AGENTS.md
 ```
 
-## 5. Environment and Installation
+| Path | Responsibility |
+|---|---|
+| `api/` | CLI parsing, command orchestration, runtime logging setup, and command constants |
+| `domain/` | Shared source contracts and typed market-data models |
+| `ingestion/` | Bronze normalizers, parquet lake writers, config loading, and file-locking utilities |
+| `sources/` | Deribit public REST fetchers and source adapter registry |
+| `scripts/` | Operational helpers, including Bronze layout migration and agent sync tooling |
+| `tests/` | Unit, integration-style, CLI, storage, and architecture regression tests |
+| `lake/` | Local runtime Bronze data lake; ignored by git |
+| `.logs/` | Local runtime logs; ignored by git |
+| `.state/` | Local runtime state, where used; ignored by git |
+| `config.yaml` | Canonical runtime configuration file |
+| `pyproject.toml` | Project metadata and Python quality-tool configuration |
+| `main.py` | Python entrypoint wrapper for CLI execution |
+| `AGENTS.md` | Generated repository operating policy |
 
-Prerequisites:
-- Python `>=3.11`
+---
 
-Setup:
+# 3. Installation
+
+## 3.1 System Prerequisites
+
+Install Python and common workflow tooling before running collectors or quality gates.
+
+Linux (Debian/Ubuntu):
 
 ```bash
-python -m venv .venv
+sudo apt update
+sudo apt install -y git gh python3 python3-venv
+```
+
+Verify installs:
+
+```bash
+git --version
+gh --version
+python3 --version
+```
+
+## 3.2 Python Environment Setup
+
+Development setup:
+
+```bash
+python3 -m venv .venv
 source .venv/bin/activate
 pip install -U pip
 pip install -e ".[dev]"
 ```
 
-Runtime-only:
+Runtime-only setup:
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
 pip install -e .
 ```
 
-## 6. Configuration Model
+Runtime configuration uses:
+
+```text
+config.yaml
+```
+
+Recommended permissions:
+
+```bash
+chmod 600 config.yaml
+```
+
+## 3.3 Quick Start
+
+For an IV/RV research feed, run the Bronze collectors in this order:
+
+```bash
+python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind option
+python main.py options-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
+python main.py option-instrument-ticker-bronze-builder --debug --symbols BTC ETH SOL --max-instruments-per-run 20
+python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
+```
+
+The metadata job captures the active option universe, the options summary job provides broad chain
+liquidity context, and the per-instrument ticker job captures the selected IV/Greeks panel used by
+downstream surface builders.
+
+---
+
+# 4. Bronze Datasets
+
+All datasets are Bronze raw snapshots. Shared metadata columns include source identifiers,
+`run_id`, ingestion timestamps, dataset type, exchange, and schema version. Dataset-specific
+timestamps are preserved as the natural event or snapshot time.
+
+## 4.1 L2 Order Book (`dataset_type=l2_snapshot`)
+
+### 1. Bronze Layer
+
+Market role: raw perpetual order-book depth for spread, imbalance, microstructure, and realized
+volatility context.
+
+Endpoint: `GET /api/v2/public/get_order_book`
+
+Default command:
+
+```bash
+python main.py l2-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
+```
+
+Key fields:
+
+| Column | Market Meaning |
+|---|---|
+| `symbol` | Normalized Deribit perpetual instrument |
+| `event_time` | Exchange snapshot timestamp |
+| `bids`, `asks` | Raw book levels |
+| `mark_price`, `index_price` | Venue mark and index context |
+| `open_interest` | Perpetual positioning state |
+| `funding_8h`, `current_funding` | Funding context for carry and dislocation diagnostics |
+
+## 4.2 Options Summary (`dataset_type=options_ticker_snapshot_1m`)
+
+### 1. Bronze Layer
+
+Market role: broad option-chain context for IV surface state, liquidity screening, and downstream
+selection of high-value per-instrument ticker requests.
+
+Endpoint: `GET /api/v2/public/get_book_summary_by_currency`
+
+Default command:
+
+```bash
+python main.py options-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
+```
+
+Key fields:
+
+| Column | Market Meaning |
+|---|---|
+| `currency`, `requested_currency`, `source_currency` | Logical and Deribit endpoint currency mapping |
+| `instrument_name` | Option contract |
+| `mark_iv`, `mark_price` | Summary implied volatility and mark state |
+| `underlying_price`, `underlying_index` | Underlying reference for moneyness and term structure |
+| `open_interest`, `volume`, `volume_usd` | Liquidity and participation context |
+
+## 4.3 Option Instrument Ticker (`dataset_type=option_instrument_ticker_snapshot_1m`)
+
+### 1. Bronze Layer
+
+Market role: high-value IV/RV forecasting source with per-option `bid_iv`, `ask_iv`, `mark_iv`,
+underlying price, interest rate, open interest, and Greeks.
+
+Endpoint: `GET /api/v2/public/ticker?instrument_name=<option instrument>`
+
+Default command:
+
+```bash
+python main.py option-instrument-ticker-bronze-builder --debug --symbols BTC ETH SOL --max-instruments-per-run 20
+```
+
+Selection policy:
+
+- Aligns with the active listed option universe captured by Bronze instrument metadata.
+- Uses the current broad option summary as a liquidity and moneyness input.
+- Selects a bounded liquid prediction universe per currency rather than sparse cursor rotation.
+- Targets tenor buckets `1D`, `2D`, `7D`, `14D`, `30D`, and `60D`.
+- Targets moneyness buckets `0.90`, `0.95`, `1.00`, `1.05`, and `1.10`.
+- Captures calls and puts where available.
+- Uses the nearest listed expiry when exact 30D or 60D contracts are unavailable.
+- Filters out stale rows without a usable quote or mark.
+- Keeps live Deribit REST access in this repository; history loaders should consume this Bronze
+  dataset and build Silver/Gold surfaces downstream.
+- Join with `instrument_metadata_snapshot_daily` for `expiration_timestamp`, `strike`,
+  `option_type`, contract sizing, tick size, settlement currency, and active-state metadata.
+
+Coverage contract:
+
+| Item | Contract |
+|---|---|
+| Target dataset | `option_instrument_ticker_snapshot_1m` |
+| Live endpoint owner | `crypto-live-loader` only |
+| Downstream owner | History/research repositories consume Bronze and build Silver/Gold surfaces |
+| Assets | BTC, ETH, SOL |
+| SOL endpoint mapping | Fetch Deribit `USDC` option summaries and keep `SOL_USDC-*` instruments |
+| Fetch mode | Sequential, bounded per run, no parallel REST fan-out |
+| Selection goal | Liquid calls and puts across target tenor and moneyness buckets |
+
+Raw ticker fields:
+
+| Column | Market Meaning |
+|---|---|
+| `instrument_name`, `state`, `exchange_timestamp`, `snapshot_time` | Contract identity, exchange event time, and capture time |
+| `ingested_at`, `run_id`, `source`, `raw_payload_hash` | Operational lineage, idempotency, and replay auditing |
+| `best_bid_price`, `best_ask_price`, `best_bid_amount`, `best_ask_amount` | Top-of-book quote and size for stale or illiquid quote filtering |
+| `bid_price`, `ask_price`, `mark_price`, `last_price` | Raw price observations from Deribit ticker payloads |
+| `bid_iv`, `ask_iv`, `mark_iv` | Bid/ask/mark implied volatility |
+| `delta`, `gamma`, `theta`, `vega`, `rho` | Option Greeks |
+| `underlying_price`, `underlying_index`, `index_price` | IV/RV alignment inputs |
+| `interest_rate`, `open_interest` | Carry and positioning context |
+| `volume`, `volume_usd`, `high`, `low`, `price_change` | 24h liquidity and activity context |
+
+Metadata join fields:
+
+| Column | Market Meaning |
+|---|---|
+| `base_currency`, `quote_currency`, `settlement_currency`, `counter_currency` | Correct cross-asset joins and settlement semantics |
+| `expiration_timestamp`, `strike`, `option_type` | Surface coordinates and time-to-expiry |
+| `contract_size`, `tick_size`, `min_trade_amount` | Tradability, notional interpretation, and liquidity filters |
+| `price_index`, `is_active`, `state` | Underlying reference and stale-contract filtering |
+
+## 4.4 Instrument Metadata (`dataset_type=instrument_metadata_snapshot_daily`)
+
+### 1. Bronze Layer
+
+Market role: active instrument reference data for option universe reconstruction and contract
+metadata auditing.
+
+Endpoint: `GET /api/v2/public/get_instruments`
+
+Default command:
+
+```bash
+python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind option
+```
+
+Key fields:
+
+| Column | Market Meaning |
+|---|---|
+| `instrument_name` | Deribit instrument identifier |
+| `base_currency`, `quote_currency`, `settlement_currency` | Contract currency semantics |
+| `strike`, `expiration_timestamp`, `option_type` | Option contract shape |
+| `is_active` | Listing status |
+
+## 4.5 Index Price (`dataset_type=index_price_snapshot_1m`)
+
+### 1. Bronze Layer
+
+Market role: raw index reference price for realized volatility calculations, option moneyness, and
+cross-dataset time alignment.
+
+Endpoint: `GET /api/v2/public/get_index_price`
+
+Default command:
+
+```bash
+python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
+```
+
+Key fields:
+
+| Column | Market Meaning |
+|---|---|
+| `index_name` | Deribit index identifier |
+| `index_price` | Raw index value |
+| `event_time` | Exchange event timestamp when available |
+| `snapshot_time` | Collector minute timestamp |
+
+---
+
+# 5. Storage Layout
+
+Bronze root:
+
+```text
+lake/bronze/
+  dataset_type=l2_snapshot/
+    exchange=<exchange>/instrument_type=perp/symbol=<symbol>/depth=<depth>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
+  dataset_type=options_ticker_snapshot_1m/
+    exchange=<exchange>/instrument_type=option/currency=<currency>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
+  dataset_type=option_instrument_ticker_snapshot_1m/
+    exchange=<exchange>/instrument_type=option/currency=<currency>/instrument_name=<instrument_name>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
+  dataset_type=instrument_metadata_snapshot_daily/
+    exchange=<exchange>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
+  dataset_type=index_price_snapshot_1m/
+    exchange=<exchange>/index_name=<index_name>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
+```
+
+Partitioning uses explicit `year=YYYY/month=MM/date=DD/hour=HH` directories. Writers upsert into one
+`data.parquet` file per partition.
+
+---
+
+# 6. Configuration Model
 
 Configuration source of truth:
+
 - Runtime file: `config.yaml`
 - Built-in defaults: `ingestion/config.py`
 
 Key controls:
-- Transport: `http.timeout_s`, `http.max_retries`, `http.retry_backoff_s`
-- Runtime: log rotation settings
-- Ingestion: symbols, depth, cadence, runtime budget
-- Lake root: `ingestion.lake_root`
-- Per-domain settings: `ingestion.options.*`, `ingestion.instrument_metadata.*`, `ingestion.index_price.*`
-  and `ingestion.option_instrument_ticker.*`
+
+| Area | Settings |
+|---|---|
+| HTTP transport | `http.timeout_s`, `http.max_retries`, `http.retry_backoff_s` |
+| Logging | `logfile`, `runtime.log_dir`, `runtime.log_rotation_days`, `runtime.log_backup_count` |
+| L2 ingestion | `ingestion.symbols`, `ingestion.levels`, `ingestion.snapshot_count`, `ingestion.poll_interval_s`, `ingestion.max_runtime_s` |
+| Options summary | `ingestion.options.*` |
+| Option instrument ticker | `ingestion.option_instrument_ticker.*` |
+| Instrument metadata | `ingestion.instrument_metadata.*` |
+| Index price | `ingestion.index_price.*` |
 
 Important behavior:
-- `max_runtime_s = 0` disables L2 runtime budget.
-- Options, instrument metadata, and index-price Bronze builders default to saving parquet output.
-- The option per-instrument ticker builder stores raw Deribit ticker IV and Greeks snapshots.
-- Discovered option per-instrument ticker fetches rotate through a bounded sequential slice per run.
 
-## 7. CLI Runbook
+- `max_runtime_s = 0` disables the L2 runtime budget.
+- Options, option instrument ticker, instrument metadata, and index-price builders default to
+  saving parquet output.
+- REST calls are sequential and bounded by HTTP timeout/retry settings.
+- `ingestion.option_instrument_ticker.max_instruments_per_run` caps the selected universe per
+  currency for each minute run.
+- Cron should use `flock` for the per-instrument ticker command to avoid overlapping ticker runs.
 
-### Bronze
+---
+
+# 7. Example Commands
+
+## 7.1 Bronze Collectors
 
 ```bash
 python main.py l2-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
@@ -133,71 +473,13 @@ python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL 
 python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
 ```
 
-### Utility
+## 7.2 Validation Utility
 
 ```bash
 python main.py validate-symbols --debug --symbols BTC ETH SOL
 ```
 
-## 8. Dataset Specifications
-
-### 8.1 Summary Matrix
-
-| Dataset | Layer | Related endpoint | Tracked range | Data semantics |
-|---|---|---|---|---|
-| `l2_snapshot` | Bronze | Deribit `public/get_order_book` | Tick snapshots (`event_time`) | Raw order-book snapshots |
-| `options_ticker_snapshot_1m` | Bronze | Deribit `public/get_book_summary_by_currency` | Minute snapshots (`snapshot_time`) | Raw option ticker rows |
-| `option_instrument_ticker_snapshot_1m` | Bronze | Deribit `public/ticker` | Minute snapshots (`snapshot_time`) | Raw per-option IV, Greeks, price, and open-interest rows |
-| `instrument_metadata_snapshot_daily` | Bronze | Deribit `public/get_instruments` | Daily snapshots (`snapshot_date`) | Raw instrument metadata rows |
-| `index_price_snapshot_1m` | Bronze | Deribit `public/get_index_price` | Minute snapshots (`snapshot_time`/`event_time`) | Raw index-price rows |
-
-### 8.2 Storage Layout
-
-Bronze root:
-
-```text
-lake/bronze/
-  dataset_type=l2_snapshot/exchange=<exchange>/instrument_type=perp/symbol=<symbol>/depth=<depth>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
-  dataset_type=options_ticker_snapshot_1m/exchange=<exchange>/instrument_type=option/currency=<currency>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
-  dataset_type=option_instrument_ticker_snapshot_1m/exchange=<exchange>/instrument_type=option/currency=<currency>/instrument_name=<instrument_name>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
-  dataset_type=instrument_metadata_snapshot_daily/exchange=<exchange>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
-  dataset_type=index_price_snapshot_1m/exchange=<exchange>/index_name=<index_name>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
-```
-
-## 9. Idempotency
-
-Idempotency behavior:
-- Upsert-based datasets merge by natural keys and deterministic sort order.
-- L2 rows are keyed by exchange, instrument type, symbol, depth, source, and event time.
-- Options rows are keyed by exchange, currency, instrument name, source, and snapshot time.
-- Option per-instrument ticker rows are keyed by exchange, instrument name, source, and snapshot time.
-- Instrument metadata rows are keyed by exchange, instrument name, and snapshot date.
-- Index-price rows are keyed by exchange, index name, event time, and source.
-
-## 10. Data Quality and Validation
-
-Built-in validation examples:
-- L2 `validate-symbols` checks symbol normalization and top-of-book sanity.
-- Bronze normalizers reject malformed option instrument names and unsupported option currency mappings.
-- External calls are bounded by configured timeout and retry settings.
-
-## 11. Observability and Logging
-
-- Every CLI command accepts `--debug` to opt into DEBUG-level logging for that run.
-- Log files are module-scoped in the configured log directory.
-- Log directory derives from `logfile` parent; falls back to runtime `log_dir`.
-- Runtime logs use one formatter: `timestamp level module_scope logger message`.
-- Job lifecycle messages use a stable key-value envelope:
-  - `job_event command=<command> event=dispatch ...`
-  - `job_event command=<command> event=debug_config ...`
-  - `job_event command=<command> event=run_summary ...`
-- Rotation controls:
-  - `runtime.log_rotation_days`
-  - `runtime.log_backup_count`
-
-## 12. Scheduling and Overnight Operations
-
-Example production cron:
+## 7.3 Production Cron
 
 ```cron
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py l2-bronze-builder --debug --symbols BTC ETH SOL
@@ -207,13 +489,19 @@ Example production cron:
 15 3 * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind option
 ```
 
-## 13. Quality Gates
+## 7.4 Quality Checks
 
 ```bash
 .venv/bin/ruff check .
 .venv/bin/ruff format --check .
+.venv/bin/mypy .
 .venv/bin/pyright --level error
+.venv/bin/ty check .
+.venv/bin/interrogate .
+.venv/bin/pydoclint api ingestion sources domain tests
 .venv/bin/pytest -q
+.venv/bin/coverage run -m pytest
+.venv/bin/coverage report
 ```
 
 Convenience target:
@@ -222,16 +510,62 @@ Convenience target:
 make check
 ```
 
-## 14. Risk Notes and Limitations
+---
 
-- Deribit-only source support.
-- REST polling only; websocket microburst capture is out of scope.
-- Local parquet storage only; no distributed metadata service.
-- Concurrent writers targeting the same parquet partition rely on local file locks.
+# 8. Operations
 
-## 15. Roadmap
+## 8.1 Idempotency
 
-- Add websocket collectors for higher-frequency market state.
+Upsert-based datasets merge by natural keys and deterministic sort order:
+
+| Dataset | Natural Key |
+|---|---|
+| `l2_snapshot` | `exchange`, `instrument_type`, `symbol`, `depth`, `source`, `event_time` |
+| `options_ticker_snapshot_1m` | `exchange`, `currency`, `instrument_name`, `source`, `snapshot_time` |
+| `option_instrument_ticker_snapshot_1m` | `exchange`, `instrument_name`, `source`, `snapshot_time` |
+| `instrument_metadata_snapshot_daily` | `exchange`, `instrument_name`, `snapshot_date` |
+| `index_price_snapshot_1m` | `exchange`, `index_name`, `event_time`, `source` |
+
+## 8.2 Observability and Logging
+
+- Every CLI command accepts `--debug`.
+- Log files are module-scoped under the configured `.logs` directory.
+- Runtime logs use one formatter: `timestamp level module_scope logger message`.
+- Job lifecycle messages use a stable key-value envelope:
+  - `job_event command=<command> event=dispatch ...`
+  - `job_event command=<command> event=debug_config ...`
+  - `job_event command=<command> event=run_summary ...`
+- Log rotation is controlled by `runtime.log_rotation_days` and `runtime.log_backup_count`.
+
+## 8.3 Data Quality
+
+Built-in validation and normalization behavior:
+
+- `validate-symbols` checks symbol normalization and top-of-book sanity.
+- Option normalizers reject malformed option instrument names.
+- SOL option ingestion filters Deribit `USDC` option responses to `SOL_USDC-*`.
+- Per-instrument ticker selection requires usable quote, mark, or liquidity information before a
+  contract enters the IV/RV prediction universe.
+- Per-instrument ticker rows preserve raw payload hashes for audit and replay.
+- External calls are bounded by configured timeout and retry settings.
+
+---
+
+# 9. Risk Notes and Limitations
+
+- Deribit is the only supported exchange.
+- The repository polls public REST endpoints only; websocket microburst capture is out of scope.
+- Local parquet storage is the only lake backend.
+- Local file locks protect partition writes but do not provide distributed coordination.
+- Per-instrument option ticker selection is optimized for IV/RV forecasting, not exhaustive option
+  archival of every listed contract every minute.
+
+---
+
+# 10. Roadmap
+
+- Extract CLI command handlers into focused modules.
+- Add websocket collectors for higher-frequency order-book and ticker state.
 - Add schema migration regression tooling.
-- Add replay tools for historical incident/backtest audits.
-- Add multi-exchange adapters behind current source contracts.
+- Add replay utilities for incident analysis and backtest audits.
+- Add multi-exchange adapters behind the current source contracts.

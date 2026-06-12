@@ -44,7 +44,6 @@ DEFAULT_CONFIG: Config = {
             "currencies": ["BTC", "ETH", "SOL"],
             "instruments": [],
             "max_instruments_per_run": 20,
-            "state_dir": ".state",
             "save_parquet_lake": True,
             "lake_root": "lake/bronze",
             "source": "rest_ticker",
