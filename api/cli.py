@@ -5,11 +5,9 @@ from __future__ import annotations
 import argparse
 import json
 import logging
-import re
 from collections.abc import Callable, Mapping
 from dataclasses import asdict
 from datetime import UTC, datetime
-from pathlib import Path
 from time import perf_counter
 from typing import TypeAlias, cast
 
@@ -76,6 +74,7 @@ from ingestion.option_instrument_ticker import (
     utc_run_id as option_instrument_ticker_utc_run_id,
 )
 from ingestion.option_instrument_ticker_lake import save_option_instrument_ticker_snapshot_parquet_lake
+from ingestion.option_ticker_universe import select_option_ticker_prediction_universe
 from ingestion.options import (
     OPTION_TICKER_DATASET_TYPE,
     OPTION_TICKER_SCHEMA_VERSION,
@@ -287,12 +286,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         "--max-instruments-per-run",
         type=int,
         default=config_int(option_instrument_ticker_config, "max_instruments_per_run", 20),
-        help="Maximum discovered option instruments to fetch sequentially per run",
-    )
-    option_instrument_ticker_parser.add_argument(
-        "--state-dir",
-        default=config_str(option_instrument_ticker_config, "state_dir", ".state"),
-        help="Runtime state directory for rotating discovered option instruments",
+        help="Maximum selected option instruments to fetch sequentially per currency",
     )
     _boolean_optional_flag(
         option_instrument_ticker_parser,
@@ -852,10 +846,12 @@ def _run_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger
     )
 
 
-def _discover_option_ticker_instruments_by_currency(
-    currencies: list[str], explicit_instruments: list[str]
+def _select_option_ticker_prediction_universe_by_currency(
+    currencies: list[str],
+    explicit_instruments: list[str],
+    max_instruments_per_currency: int,
 ) -> tuple[dict[str, list[str]], list[str]]:
-    """Return explicit or discovered Deribit option instruments grouped by requested currency."""
+    """Return explicit or summary-selected option instruments grouped by requested currency."""
 
     normalized_explicit = _normalize_cli_instruments(explicit_instruments)
     if normalized_explicit:
@@ -866,103 +862,33 @@ def _discover_option_ticker_instruments_by_currency(
     for currency in currencies:
         try:
             request = resolve_options_currency_request(currency)
-            currency_instruments: list[str] = []
-            rows = fetch_instruments(currency=request.source_currency, kind="option", expired=False)
-            for row in rows:
-                instrument_name = row.get("instrument_name")
-                if not isinstance(instrument_name, str):
-                    continue
-                if request.instrument_prefix is None or instrument_name.startswith(request.instrument_prefix):
-                    currency_instruments.append(instrument_name.upper())
-            instruments_by_currency[currency] = sorted(dict.fromkeys(currency_instruments))
+            rows = fetch_option_book_summary_rows(request)
+            instruments_by_currency[currency] = select_option_ticker_prediction_universe(
+                rows,
+                max_instruments=max_instruments_per_currency,
+            )
         except Exception as exc:  # noqa: BLE001
             errors.append(f"{currency}: {exc}")
             instruments_by_currency[currency] = []
     return instruments_by_currency, errors
 
 
-def _option_ticker_cursor_path(state_dir: str, exchange: str, currencies: list[str], source: str) -> Path:
-    """Return the cursor state path for rotating discovered option ticker instruments."""
-
-    cursor_key = "-".join([exchange, *currencies, source]).lower()
-    safe_key = re.sub(r"[^a-z0-9_.-]+", "-", cursor_key).strip("-") or "default"
-    return Path(state_dir) / f"option-instrument-ticker-{safe_key}.json"
-
-
-def _read_option_ticker_cursor(cursor_path: Path) -> int:
-    """Read the next discovered-instrument cursor index from disk."""
-
-    if not cursor_path.exists():
-        return 0
-    payload = json.loads(cursor_path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict) or not isinstance(payload.get("next_index"), int):
-        raise ValueError(f"Invalid option ticker cursor file: {cursor_path}")
-    next_index = int(payload["next_index"])
-    if next_index < 0:
-        raise ValueError(f"Invalid negative option ticker cursor index: {cursor_path}")
-    return next_index
-
-
-def _write_option_ticker_cursor(cursor_path: Path, next_index: int) -> None:
-    """Persist the next discovered-instrument cursor index."""
-
-    cursor_path.parent.mkdir(parents=True, exist_ok=True)
-    cursor_path.write_text(json.dumps({"next_index": next_index}, sort_keys=True), encoding="utf-8")
-
-
-def _select_option_ticker_instruments(
-    instruments: list[str],
-    *,
-    explicit_instruments: list[str],
-    max_instruments_per_run: int,
-    cursor_path: Path,
-) -> tuple[list[str], int | None]:
-    """Select one sequential fetch slice, rotating discovered instruments across runs."""
-
-    if explicit_instruments or not instruments:
-        return instruments, None
-
-    requested_count = min(max(1, max_instruments_per_run), len(instruments))
-    start_index = _read_option_ticker_cursor(cursor_path) % len(instruments)
-    selected = [instruments[(start_index + offset) % len(instruments)] for offset in range(requested_count)]
-    next_index = (start_index + len(selected)) % len(instruments)
-    return selected, next_index
-
-
-def _select_option_ticker_instruments_by_currency(
+def _limit_option_ticker_instruments_by_currency(
     instruments_by_currency: dict[str, list[str]],
     *,
     explicit_instruments: list[str],
     max_instruments_per_run: int,
-    state_dir: str,
-    exchange: str,
-    source: str,
-) -> tuple[list[str], dict[str, int | None]]:
-    """Select one bounded rotating slice for each requested option currency."""
+) -> list[str]:
+    """Limit selected prediction-universe instruments per requested option currency."""
 
     if explicit_instruments:
-        return instruments_by_currency.get("explicit", []), {"explicit": None}
+        return instruments_by_currency.get("explicit", [])
 
     selected: list[str] = []
-    next_indices: dict[str, int | None] = {}
-    for currency, currency_instruments in instruments_by_currency.items():
-        cursor_path = _option_ticker_cursor_path(
-            state_dir=state_dir,
-            exchange=exchange,
-            currencies=[currency],
-            source=source,
-        )
-        currency_selection, next_index = _select_option_ticker_instruments(
-            currency_instruments,
-            explicit_instruments=[],
-            max_instruments_per_run=max_instruments_per_run,
-            cursor_path=cursor_path,
-        )
-        selected.extend(currency_selection)
-        next_indices[currency] = next_index
-        if next_index is not None:
-            _write_option_ticker_cursor(cursor_path=cursor_path, next_index=next_index)
-    return selected, next_indices
+    requested_count = max(1, max_instruments_per_run)
+    for currency_instruments in instruments_by_currency.values():
+        selected.extend(currency_instruments[:requested_count])
+    return selected
 
 
 def _run_option_instrument_ticker_bronze_builder(
@@ -974,20 +900,19 @@ def _run_option_instrument_ticker_bronze_builder(
     started_at = perf_counter()
     currencies = _normalize_cli_currencies(cast(list[str], args.currencies))
     explicit_instruments = _normalize_cli_instruments(cast(list[str], args.instruments))
-    instruments_by_currency, discovery_errors = _discover_option_ticker_instruments_by_currency(
+    max_instruments_per_currency = max(1, int(args.max_instruments_per_run))
+    instruments_by_currency, discovery_errors = _select_option_ticker_prediction_universe_by_currency(
         currencies=currencies,
         explicit_instruments=explicit_instruments,
+        max_instruments_per_currency=max_instruments_per_currency,
     )
     run_id = option_instrument_ticker_utc_run_id()
     snapshot_time = option_instrument_ticker_snapshot_time_floor_minute()
     ingested_at = datetime.now(UTC)
-    instruments, cursor_next_indices = _select_option_ticker_instruments_by_currency(
+    instruments = _limit_option_ticker_instruments_by_currency(
         instruments_by_currency,
         explicit_instruments=explicit_instruments,
-        max_instruments_per_run=int(args.max_instruments_per_run),
-        state_dir=cast(str, args.state_dir),
-        exchange=cast(str, args.exchange),
-        source=cast(str, args.source),
+        max_instruments_per_run=max_instruments_per_currency,
     )
 
     raw_rows_by_instrument, fetch_errors = _fetch_option_ticker_rows_for_instruments(instruments=instruments)
@@ -1015,7 +940,6 @@ def _run_option_instrument_ticker_bronze_builder(
             "instruments_requested": len(
                 [instrument for instrument in instruments if instrument in currency_instruments]
             ),
-            "cursor_next_index": cursor_next_indices.get(currency),
         }
         for currency, currency_instruments in instruments_by_currency.items()
     }
@@ -1028,7 +952,6 @@ def _run_option_instrument_ticker_bronze_builder(
         "requested_currencies": currencies,
         "instruments_discovered": instruments_discovered,
         "instruments_requested": len(instruments),
-        "cursor_next_indices": cursor_next_indices,
         "currency_results": currency_results,
         "rows_written": len(rows),
         "output_files": output_files,
@@ -1046,7 +969,6 @@ def _run_option_instrument_ticker_bronze_builder(
         files=len(output_files),
         instruments_discovered=instruments_discovered,
         instruments_requested=len(instruments),
-        cursor_next_indices=cursor_next_indices,
         rows_written=len(rows),
         run_id=run_id,
         snapshot_time=output["snapshot_time"],

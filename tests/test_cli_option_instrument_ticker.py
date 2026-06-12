@@ -12,6 +12,7 @@ from api import cli
 from api.constants import OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND
 from ingestion.config import Config
 from ingestion.option_instrument_ticker import OptionInstrumentTickerSnapshotRow
+from sources.deribit_options import OptionsCurrencyRequest
 
 
 @pytest.fixture(autouse=True)
@@ -33,7 +34,6 @@ def _isolate_cli_test_logs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
                 "currencies": ["BTC", "ETH", "SOL"],
                 "instruments": [],
                 "max_instruments_per_run": 20,
-                "state_dir": str(tmp_path / "state"),
                 "save_parquet_lake": True,
                 "lake_root": "lake/bronze",
                 "source": "rest_ticker",
@@ -55,12 +55,16 @@ def _sample_row(instrument_name: str) -> OptionInstrumentTickerSnapshotRow:
         instrument_type="option",
         snapshot_time=datetime(2026, 5, 24, 7, 15, tzinfo=UTC),
         exchange_creation_time=None,
+        exchange_timestamp=None,
         ingested_at=datetime(2026, 5, 24, 7, 15, 1, tzinfo=UTC),
         run_id="run",
+        state=None,
         bid_price=None,
         ask_price=None,
         best_bid_price=None,
         best_ask_price=None,
+        best_bid_amount=None,
+        best_ask_amount=None,
         bid_iv=54.1,
         ask_iv=55.2,
         mark_iv=54.8,
@@ -68,10 +72,14 @@ def _sample_row(instrument_name: str) -> OptionInstrumentTickerSnapshotRow:
         last_price=None,
         underlying_price=76839.1,
         underlying_index="BTC-30JUN26",
+        index_price=None,
         interest_rate=0.03,
         open_interest=None,
         volume=None,
         volume_usd=None,
+        high=None,
+        low=None,
+        price_change=None,
         delta=0.42,
         gamma=None,
         theta=None,
@@ -120,42 +128,47 @@ def test_option_instrument_ticker_cli_uses_explicit_instruments(
     assert output["dataset_type"] == "option_instrument_ticker_snapshot_1m"
     assert output["instruments_requested"] == 1
     assert output["instruments_discovered"] == 1
-    assert output["cursor_next_indices"] == {"explicit": None}
     assert output["rows_written"] == 1
     assert output["output_files"] == ["/tmp/option_instrument.parquet"]
 
 
-def test_option_instrument_ticker_cli_discovers_currency_instruments(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Verify discovery maps SOL to USDC instruments and filters by SOL prefix."""
+def test_option_instrument_ticker_cli_selects_currency_universe(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Verify selection maps SOL to USDC summaries and keeps SOL instruments."""
 
-    calls: list[tuple[str, str, bool]] = []
+    calls: list[str] = []
 
-    def fake_fetch_instruments(currency: str, kind: str, expired: bool) -> list[dict[str, object]]:
-        calls.append((currency, kind, expired))
+    def fake_fetch_summary(request: OptionsCurrencyRequest) -> list[dict[str, object]]:
+        calls.append(request.source_currency)
         return [
-            {"instrument_name": "SOL_USDC-30JUN26-250-C"},
-            {"instrument_name": "BTC-30JUN26-120000-C"},
+            {
+                "instrument_name": "SOL_USDC-30JUN26-250-C",
+                "underlying_price": 250.0,
+                "ask_price": 0.1,
+                "bid_price": 0.09,
+                "open_interest": 10,
+            }
         ]
 
-    monkeypatch.setattr(cli, "fetch_instruments", fake_fetch_instruments)
+    monkeypatch.setattr(cli, "fetch_option_book_summary_rows", fake_fetch_summary)
 
-    instruments_by_currency, errors = cli._discover_option_ticker_instruments_by_currency(
-        currencies=["SOL"], explicit_instruments=[]
+    instruments_by_currency, errors = cli._select_option_ticker_prediction_universe_by_currency(
+        currencies=["SOL"],
+        explicit_instruments=[],
+        max_instruments_per_currency=2,
     )
 
     assert errors == []
-    assert calls == [("USDC", "option", False)]
+    assert calls == ["USDC"]
     assert instruments_by_currency == {"SOL": ["SOL_USDC-30JUN26-250-C"]}
 
 
-def test_option_instrument_ticker_cli_rotates_each_currency_slice(
+def test_option_instrument_ticker_cli_fetches_prediction_universe_for_each_currency(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    tmp_path: Path,
 ) -> None:
-    """Verify every requested currency gets a bounded sequential rotating slice."""
+    """Verify every requested currency gets a bounded selected prediction universe."""
 
-    discovered_by_currency = {
+    selected_by_currency = {
         "BTC": ["BTC-30JUN26-100000-C", "BTC-30JUN26-110000-C", "BTC-30JUN26-120000-C"],
         "ETH": ["ETH-30JUN26-4000-C", "ETH-30JUN26-4200-C"],
         "SOL": ["SOL_USDC-30JUN26-200-C", "SOL_USDC-30JUN26-220-C"],
@@ -164,8 +177,8 @@ def test_option_instrument_ticker_cli_rotates_each_currency_slice(
 
     monkeypatch.setattr(
         cli,
-        "_discover_option_ticker_instruments_by_currency",
-        lambda **kwargs: (discovered_by_currency, []),
+        "_select_option_ticker_prediction_universe_by_currency",
+        lambda **kwargs: (selected_by_currency, []),
     )
 
     def fake_fetch(instruments: list[str]) -> tuple[dict[str, dict[str, object]], dict[str, str]]:
@@ -193,16 +206,10 @@ def test_option_instrument_ticker_cli_rotates_each_currency_slice(
         "SOL",
         "--max-instruments-per-run",
         "2",
-        "--state-dir",
-        str(tmp_path),
     ]
     monkeypatch.setattr("sys.argv", argv)
     cli.main()
-    first_output = json.loads(capsys.readouterr().out)
-
-    monkeypatch.setattr("sys.argv", argv)
-    cli.main()
-    second_output = json.loads(capsys.readouterr().out)
+    output = json.loads(capsys.readouterr().out)
 
     assert fetched_batches == [
         [
@@ -212,20 +219,10 @@ def test_option_instrument_ticker_cli_rotates_each_currency_slice(
             "ETH-30JUN26-4200-C",
             "SOL_USDC-30JUN26-200-C",
             "SOL_USDC-30JUN26-220-C",
-        ],
-        [
-            "BTC-30JUN26-120000-C",
-            "BTC-30JUN26-100000-C",
-            "ETH-30JUN26-4000-C",
-            "ETH-30JUN26-4200-C",
-            "SOL_USDC-30JUN26-200-C",
-            "SOL_USDC-30JUN26-220-C",
-        ],
+        ]
     ]
-    assert first_output["instruments_discovered"] == 7
-    assert first_output["instruments_requested"] == 6
-    assert first_output["cursor_next_indices"] == {"BTC": 2, "ETH": 0, "SOL": 0}
-    assert second_output["cursor_next_indices"] == {"BTC": 1, "ETH": 0, "SOL": 0}
-    assert first_output["currency_results"]["BTC"]["instruments_requested"] == 2
-    assert first_output["currency_results"]["ETH"]["instruments_requested"] == 2
-    assert first_output["currency_results"]["SOL"]["instruments_requested"] == 2
+    assert output["instruments_discovered"] == 7
+    assert output["instruments_requested"] == 6
+    assert output["currency_results"]["BTC"]["instruments_requested"] == 2
+    assert output["currency_results"]["ETH"]["instruments_requested"] == 2
+    assert output["currency_results"]["SOL"]["instruments_requested"] == 2

@@ -25,12 +25,16 @@ class OptionInstrumentTickerSnapshotRow:
     instrument_type: str
     snapshot_time: datetime
     exchange_creation_time: datetime | None
+    exchange_timestamp: datetime | None
     ingested_at: datetime
     run_id: str
+    state: str | None
     bid_price: float | None
     ask_price: float | None
     best_bid_price: float | None
     best_ask_price: float | None
+    best_bid_amount: float | None
+    best_ask_amount: float | None
     bid_iv: float | None
     ask_iv: float | None
     mark_iv: float | None
@@ -38,10 +42,14 @@ class OptionInstrumentTickerSnapshotRow:
     last_price: float | None
     underlying_price: float | None
     underlying_index: str | None
+    index_price: float | None
     interest_rate: float | None
     open_interest: float | None
     volume: float | None
     volume_usd: float | None
+    high: float | None
+    low: float | None
+    price_change: float | None
     delta: float | None
     gamma: float | None
     theta: float | None
@@ -135,12 +143,16 @@ def _normalize_option_instrument_ticker_row(
         instrument_type="option",
         snapshot_time=snapshot_time,
         exchange_creation_time=_timestamp_ms_to_datetime(row.get("creation_timestamp")),
+        exchange_timestamp=_timestamp_ms_to_datetime(row.get("timestamp")),
         ingested_at=ingested_at,
         run_id=run_id,
+        state=_to_optional_str(row.get("state")),
         bid_price=_to_optional_float(row.get("bid_price")),
         ask_price=_to_optional_float(row.get("ask_price")),
         best_bid_price=_to_optional_float(row.get("best_bid_price")),
         best_ask_price=_to_optional_float(row.get("best_ask_price")),
+        best_bid_amount=_to_optional_float(row.get("best_bid_amount")),
+        best_ask_amount=_to_optional_float(row.get("best_ask_amount")),
         bid_iv=_to_optional_float(row.get("bid_iv")),
         ask_iv=_to_optional_float(row.get("ask_iv")),
         mark_iv=_to_optional_float(row.get("mark_iv")),
@@ -148,10 +160,14 @@ def _normalize_option_instrument_ticker_row(
         last_price=_to_optional_float(row.get("last_price")),
         underlying_price=_to_optional_float(row.get("underlying_price")),
         underlying_index=_to_optional_str(row.get("underlying_index")),
+        index_price=_to_optional_float(row.get("index_price")),
         interest_rate=_to_optional_float(row.get("interest_rate")),
         open_interest=_to_optional_float(row.get("open_interest")),
         volume=_to_optional_float(stats_payload.get("volume")),
         volume_usd=_to_optional_float(stats_payload.get("volume_usd")),
+        high=_to_optional_float(stats_payload.get("high")),
+        low=_to_optional_float(stats_payload.get("low")),
+        price_change=_to_optional_float(stats_payload.get("price_change")),
         delta=_to_optional_float(greeks_payload.get("delta")),
         gamma=_to_optional_float(greeks_payload.get("gamma")),
         theta=_to_optional_float(greeks_payload.get("theta")),
