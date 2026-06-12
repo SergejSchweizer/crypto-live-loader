@@ -68,6 +68,18 @@ DEFAULT_CONFIG: Config = {
             "schema_version": "v1",
             "json_output": False,
         },
+        "recent_trades": {
+            "currencies": ["BTC", "ETH", "SOL"],
+            "kinds": ["option", "future"],
+            "count": 1000,
+            "lookback_seconds": 90,
+            "sorting": "asc",
+            "save_parquet_lake": True,
+            "lake_root": "lake/bronze",
+            "source": "rest_get_last_trades_by_currency",
+            "schema_version": "v1",
+            "json_output": False,
+        },
     },
 }
 

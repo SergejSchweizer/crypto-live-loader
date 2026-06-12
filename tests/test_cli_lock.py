@@ -17,6 +17,7 @@ from api.constants import (
     INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
     OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
     OPTIONS_BRONZE_BUILDER_COMMAND,
+    RECENT_TRADES_BRONZE_BUILDER_COMMAND,
     VALIDATE_SYMBOLS_COMMAND,
 )
 from api.runtime import configure_logging
@@ -183,6 +184,7 @@ def test_cron_layer_commands_accept_debug_flag() -> None:
             "BTC-26JUN26-120000-C",
         ],
         [INDEX_PRICE_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "btc_usd", "eth_usd", "sol_usdc"],
+        [RECENT_TRADES_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL"],
         [INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL", "--kind", "option"],
     ]
 
