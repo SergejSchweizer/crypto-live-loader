@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime
 from pathlib import Path
 
 from ingestion.options import OptionTickerSnapshotRow
+from ingestion.parquet_repository import ParquetUpsertRepository
 
 OptionPartitionKey = tuple[str, str, str, str, str, str, str]
+OptionNaturalKey = tuple[str, str, str, str, datetime]
 
 
 def option_snapshot_partition_path(lake_root: str, key: OptionPartitionKey) -> Path:
@@ -65,17 +68,35 @@ def options_ticker_snapshot_record(row: OptionTickerSnapshotRow) -> dict[str, ob
     }
 
 
+def _option_snapshot_natural_key(record: dict[str, object]) -> OptionNaturalKey:
+    """Build the idempotent natural key for one option ticker snapshot row."""
+
+    snapshot_time = record["snapshot_time"]
+    if not isinstance(snapshot_time, datetime):
+        raise ValueError("snapshot_time must be datetime")
+    return (
+        str(record["exchange"]),
+        str(record["currency"]),
+        str(record["instrument_name"]),
+        str(record["source"]),
+        snapshot_time,
+    )
+
+
+def _option_snapshot_sort_key(record: dict[str, object]) -> str:
+    snapshot_time = record["snapshot_time"]
+    if not isinstance(snapshot_time, datetime):
+        raise ValueError("snapshot_time must be datetime")
+    return f"{snapshot_time.isoformat()}|{record['currency']}|{record['instrument_name']}"
+
+
 def save_options_ticker_snapshot_parquet_lake(
     rows_by_currency: dict[str, list[OptionTickerSnapshotRow]],
     lake_root: str,
 ) -> list[str]:
-    """Append option snapshot rows into daily bronze parquet partitions."""
+    """Upsert option snapshot rows into one daily bronze parquet file per partition."""
 
-    try:
-        import pyarrow as pa
-        import pyarrow.parquet as pq
-    except ImportError as exc:
-        raise RuntimeError("pyarrow is required for parquet lake output. Install project dependencies.") from exc
+    repository = ParquetUpsertRepository()
 
     grouped: defaultdict[OptionPartitionKey, list[dict[str, object]]] = defaultdict(list)
     for rows in rows_by_currency.values():
@@ -94,12 +115,16 @@ def save_options_ticker_snapshot_parquet_lake(
     written_files: list[str] = []
     for key, records in grouped.items():
         part_dir = option_snapshot_partition_path(lake_root=lake_root, key=key)
-        part_dir.mkdir(parents=True, exist_ok=True)
-        run_id = records[0]["run_id"]
-        file_path = part_dir / f"part-{run_id}.parquet"
-        table = pa.Table.from_pylist(records)
-        pq.write_table(table, file_path)  # type: ignore[no-untyped-call]
-        written_files.append(str(file_path.resolve()))
+        file_path = part_dir / "data.parquet"
+        written_files.append(
+            repository.upsert(
+                file_path=file_path,
+                records=records,
+                natural_key=lambda item: _option_snapshot_natural_key(item),
+                sort_key=lambda item: _option_snapshot_sort_key(item),
+                staging_name=f".staging-{records[0]['run_id']}.parquet",
+            )
+        )
 
     return sorted(written_files)
 
