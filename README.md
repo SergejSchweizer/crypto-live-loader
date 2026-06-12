@@ -214,11 +214,6 @@ Artifact behavior:
 - Gold instrument-metadata and index-price writers emit `data.parquet` and, when `--plot` is enabled, `data.png`.
 - Gold readers ignore hidden writer scratch parquet paths such as `.staging-*.parquet`.
 
-Compatibility note:
-- Options Silver reads both:
-  - `dataset_type=options_ticker_snapshot_1m` (current)
-  - `dataset_type=option_ticker_snapshot_1m` (legacy)
-
 ## 9. Incremental Processing and Idempotency
 
 State files are used to avoid redundant recomputation:
@@ -264,14 +259,14 @@ Example production cron:
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-bronze-builder --debug --symbols BTC ETH SOL
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
 15 3 * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind option
-15 15 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py l2-silver-builder --debug --no-plot --no-manifest
-15 16 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py options-silver-builder --debug --no-plot --no-manifest
-15 19 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py instrument-metadata-silver-builder --debug
-15 20 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py index-price-silver-builder --debug
-15 17 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py l2-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
-15 18 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py options-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
-15 21 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py instrument-metadata-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
-15 22 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py index-price-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
+# disabled 2026-06-12 bronze-only: 15 15 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py l2-silver-builder --debug --no-plot --no-manifest
+# disabled 2026-06-12 bronze-only: 15 16 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py options-silver-builder --debug --no-plot --no-manifest
+# disabled 2026-06-12 bronze-only: 15 19 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py instrument-metadata-silver-builder --debug
+# disabled 2026-06-12 bronze-only: 15 20 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py index-price-silver-builder --debug
+# disabled 2026-06-12 bronze-only: 15 17 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py l2-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
+# disabled 2026-06-12 bronze-only: 15 18 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py options-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
+# disabled 2026-06-12 bronze-only: 15 21 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py instrument-metadata-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
+# disabled 2026-06-12 bronze-only: 15 22 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py index-price-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
 ```
 
 ## 13. Quality Gates
