@@ -271,6 +271,15 @@ Key fields:
 | `open_interest` | Perpetual positioning state |
 | `funding_8h`, `current_funding` | Funding context for carry and dislocation diagnostics |
 
+Fetched columns:
+
+| Group | Columns |
+|---|---|
+| Identity | `schema_version`, `dataset_type`, `exchange`, `symbol`, `instrument_type`, `source`, `depth` |
+| Time/lineage | `event_time`, `ingested_at`, `run_id`, `fetch_duration_s` |
+| Book | `bids`, `asks` |
+| Market state | `mark_price`, `index_price`, `open_interest`, `funding_8h`, `current_funding` |
+
 ## 4.2 Options Summary (`dataset_type=options_ticker_snapshot_1m`)
 
 ### 1. Bronze Layer
@@ -295,6 +304,16 @@ Key fields:
 | `mark_iv`, `mark_price` | Summary implied volatility and mark state |
 | `underlying_price`, `underlying_index` | Underlying reference for moneyness and term structure |
 | `open_interest`, `volume`, `volume_usd` | Liquidity and participation context |
+
+Fetched columns:
+
+| Group | Columns |
+|---|---|
+| Identity | `exchange`, `dataset_type`, `source`, `currency`, `requested_currency`, `source_currency`, `instrument_name`, `base_currency`, `quote_currency`, `instrument_type`, `schema_version` |
+| Time/lineage | `snapshot_time`, `exchange_creation_time`, `ingested_at`, `run_id`, `raw_payload_hash` |
+| Price/IV | `bid_price`, `ask_price`, `mid_price`, `mark_price`, `mark_iv`, `last`, `price_change` |
+| Underlying/carry | `underlying_price`, `underlying_index`, `interest_rate` |
+| Liquidity/activity | `open_interest`, `volume`, `volume_usd`, `high`, `low` |
 
 ## 4.3 Option Instrument Ticker (`dataset_type=option_instrument_ticker_snapshot_1m`)
 
@@ -352,6 +371,17 @@ Raw ticker fields:
 | `interest_rate`, `open_interest` | Carry and positioning context |
 | `volume`, `volume_usd`, `high`, `low`, `price_change` | 24h liquidity and activity context |
 
+Fetched columns:
+
+| Group | Columns |
+|---|---|
+| Identity | `exchange`, `dataset_type`, `source`, `currency`, `instrument_name`, `instrument_type`, `schema_version`, `state` |
+| Time/lineage | `snapshot_time`, `exchange_creation_time`, `exchange_timestamp`, `ingested_at`, `run_id`, `raw_payload_hash` |
+| Quote/price | `bid_price`, `ask_price`, `best_bid_price`, `best_ask_price`, `best_bid_amount`, `best_ask_amount`, `mark_price`, `last_price` |
+| IV/Greeks | `bid_iv`, `ask_iv`, `mark_iv`, `delta`, `gamma`, `theta`, `vega`, `rho` |
+| Underlying/carry | `underlying_price`, `underlying_index`, `index_price`, `interest_rate` |
+| Liquidity/activity | `open_interest`, `volume`, `volume_usd`, `high`, `low`, `price_change` |
+
 Metadata join fields:
 
 | Column | Market Meaning |
@@ -385,6 +415,16 @@ Key fields:
 | `strike`, `expiration_timestamp`, `option_type` | Option contract shape |
 | `is_active` | Listing status |
 
+Fetched columns:
+
+| Group | Columns |
+|---|---|
+| Identity | `schema_version`, `dataset_type`, `exchange`, `source`, `instrument_name`, `kind`, `instrument_type` |
+| Time/lineage | `snapshot_date`, `ingested_at`, `run_id`, `raw_payload_hash` |
+| Currency semantics | `base_currency`, `quote_currency`, `counter_currency`, `settlement_currency` |
+| Contract rules | `tick_size`, `contract_size`, `min_trade_amount`, `is_active` |
+| Lifecycle/option shape | `creation_timestamp`, `expiration_timestamp`, `option_type`, `strike` |
+
 ## 4.5 Index Price (`dataset_type=index_price_snapshot_1m`)
 
 ### 1. Bronze Layer
@@ -408,6 +448,14 @@ Key fields:
 | `index_price` | Raw index value |
 | `event_time` | Exchange event timestamp when available |
 | `snapshot_time` | Collector minute timestamp |
+
+Fetched columns:
+
+| Group | Columns |
+|---|---|
+| Identity | `schema_version`, `dataset_type`, `exchange`, `source`, `index_name` |
+| Time/lineage | `snapshot_time`, `event_time`, `ingested_at`, `run_id`, `raw_payload_hash` |
+| Price | `price` |
 
 ## 4.6 Recent Trade Tape (`dataset_type=recent_trade_snapshot_1m`)
 
@@ -445,6 +493,15 @@ Key fields:
 | `signed_amount`, `notional` | Derived signed flow and price-times-amount notional |
 | `mark_price`, `index_price`, `iv` | Model context for futures/perps and option trade IV |
 | `liquidation`, `block_trade_id`, `raw_payload_hash` | Liquidation/block context and replay checksum |
+
+Fetched columns:
+
+| Group | Columns |
+|---|---|
+| Identity | `schema_version`, `dataset_type`, `exchange`, `source`, `requested_currency`, `source_currency`, `currency`, `instrument_name`, `instrument_type`, `kind`, `trade_id`, `trade_sequence` |
+| Time/lineage | `exchange_timestamp`, `snapshot_time`, `ingested_at`, `run_id`, `raw_payload_hash` |
+| Trade | `price`, `amount`, `direction`, `tick_direction`, `signed_amount`, `notional` |
+| Market context | `mark_price`, `index_price`, `iv`, `liquidation`, `block_trade_id` |
 
 ---
 
