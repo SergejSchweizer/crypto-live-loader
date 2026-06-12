@@ -49,9 +49,7 @@ def options_bronze_parquet_files(bronze_lake_root: str) -> list[Path]:
     """Return option bronze parquet inputs in deterministic order."""
 
     root = Path(bronze_lake_root)
-    files = list(root.glob("dataset_type=options_ticker_snapshot_1m/**/*.parquet"))
-    files.extend(root.glob("dataset_type=option_ticker_snapshot_1m/**/*.parquet"))
-    return sorted({path.resolve(): path for path in files}.values())
+    return sorted(root.glob("dataset_type=options_ticker_snapshot_1m/**/*.parquet"))
 
 
 def transform_option_bronze_to_silver(
@@ -150,7 +148,7 @@ def _path_partition_value(path: Path, name: str, prefix_length: int | None = Non
 
 
 def _path_month_partition(path: Path) -> str | None:
-    """Return the logical ``YYYY-MM`` month for current and legacy bronze layouts."""
+    """Return the logical ``YYYY-MM`` month for supported bronze layouts."""
 
     year_partition = _path_partition_value(path, "year")
     month_partition = _path_partition_value(path, "month")
@@ -162,7 +160,7 @@ def _path_month_partition(path: Path) -> str | None:
 
 
 def _path_day_partition(path: Path) -> str | None:
-    """Return a stable daily grouping key for current and legacy bronze layouts."""
+    """Return a stable daily grouping key for supported bronze layouts."""
 
     year_partition = _path_partition_value(path, "year")
     month_partition = _path_partition_value(path, "month")

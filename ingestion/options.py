@@ -10,7 +10,6 @@ from datetime import UTC, datetime
 from sources.deribit_options import DERIBIT_OPTIONS_SOURCE
 
 OPTIONS_TICKER_DATASET_TYPE = "options_ticker_snapshot_1m"
-LEGACY_OPTION_TICKER_DATASET_TYPE = "option_ticker_snapshot_1m"
 OPTION_TICKER_DATASET_TYPE = OPTIONS_TICKER_DATASET_TYPE
 OPTION_TICKER_SCHEMA_VERSION = "v1"
 OPTION_TICKER_SOURCE = "rest_get_book_summary_by_currency"
