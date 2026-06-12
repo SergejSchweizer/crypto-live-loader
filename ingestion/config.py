@@ -31,8 +31,6 @@ DEFAULT_CONFIG: Config = {
         "max_runtime_s": 50,
         "save_parquet_lake": True,
         "lake_root": "lake/bronze",
-        "silver_lake_root": "lake/silver",
-        "gold_lake_root": "lake/gold",
         "json_output": False,
         "options": {
             "enabled": True,

@@ -30,8 +30,6 @@ def _isolate_cli_test_logs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
             "max_runtime_s": 50,
             "save_parquet_lake": False,
             "lake_root": "lake/bronze",
-            "silver_lake_root": "lake/silver",
-            "gold_lake_root": "lake/gold",
             "json_output": True,
             "options": {
                 "enabled": True,

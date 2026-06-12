@@ -15,7 +15,7 @@ class ModuleScopeFilter(logging.Filter):
         module_scope = "core"
         if "options" in logger_name:
             module_scope = "options"
-        elif "l2" in logger_name or "bronze-builder" in logger_name or "silver-builder" in logger_name:
+        elif "l2" in logger_name or "bronze-builder" in logger_name:
             module_scope = "l2"
         record.module_scope = module_scope
         return True

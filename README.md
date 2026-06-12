@@ -1,6 +1,6 @@
 # crypto-live-loader
 
-Deterministic Deribit market-data ingestion and feature pipeline for quantitative research and production analytics.
+Deterministic Deribit Bronze market-data ingestion for quantitative research and production analytics.
 
 ## Table of Contents
 - [1. Executive Summary](#1-executive-summary)
@@ -11,7 +11,7 @@ Deterministic Deribit market-data ingestion and feature pipeline for quantitativ
 - [6. Configuration Model](#6-configuration-model)
 - [7. CLI Runbook](#7-cli-runbook)
 - [8. Dataset Specifications](#8-dataset-specifications)
-- [9. Incremental Processing and Idempotency](#9-incremental-processing-and-idempotency)
+- [9. Idempotency](#9-idempotency)
 - [10. Data Quality and Validation](#10-data-quality-and-validation)
 - [11. Observability and Logging](#11-observability-and-logging)
 - [12. Scheduling and Overnight Operations](#12-scheduling-and-overnight-operations)
@@ -21,12 +21,12 @@ Deterministic Deribit market-data ingestion and feature pipeline for quantitativ
 
 ## 1. Executive Summary
 
-`crypto-live-loader` provides a reproducible Bronze -> Silver -> Gold market-data stack centered on Deribit public REST endpoints.
+`crypto-live-loader` provides a reproducible Bronze-only market-data ingestion stack centered on Deribit public REST endpoints.
 
-Primary use cases for a quant desk:
+Primary use cases:
 - Build and maintain continuous raw market-history snapshots.
-- Generate model-ready feature layers from raw order-book and options surfaces.
-- Produce deterministic aggregated datasets with lineage and state-based incremental recomputation.
+- Persist raw L2, options ticker, instrument metadata, and index-price records.
+- Keep raw lake writes deterministic, idempotent, and restart-safe.
 
 ## 2. System Scope and Guarantees
 
@@ -35,18 +35,17 @@ In scope:
 - Deribit options ticker-chain ingestion (`options_ticker_snapshot_1m`).
 - Deribit instrument metadata ingestion (`instrument_metadata_snapshot_daily`).
 - Deribit index-price ingestion (`index_price_snapshot_1m`).
-- Polars-based Silver feature transforms.
-- Gold aggregation layers and artifact emission.
 
 Operational guarantees:
 - Deterministic partitioning and typed normalization.
-- Idempotent upsert semantics for datasets using shared parquet upsert repository.
-- Incremental rebuild skipping when source fingerprints are unchanged.
-- Explicit state files for transform provenance.
+- Idempotent upsert semantics for Bronze parquet files.
+- Bounded runtime and concurrency settings for scheduled collectors.
+- Explicit debug logging for every CLI command.
 
 Out of scope:
 - Exchange private endpoints.
 - Tick-stream websocket collectors.
+- Derived feature, aggregation, or artifact layers.
 - Remote metadata catalogs and distributed locking.
 
 ## 3. Data Lineage
@@ -54,15 +53,13 @@ Out of scope:
 ```text
 Deribit REST endpoints
   -> Bronze raw snapshots (partitioned parquet)
-  -> Silver feature datasets (monthly parquet + optional artifacts)
-  -> Gold aggregates (parquet + optional artifacts)
 ```
 
 Endpoint lineage:
-- `public/get_order_book` -> `l2_snapshot` -> `l2_snapshot_features` -> `l2_m1_features`
-- `public/get_book_summary_by_currency` -> `options_ticker_snapshot_1m` -> `option_chain_features_1m` -> `option_surface_m1`
-- `public/get_instruments` -> `instrument_metadata_snapshot_daily` -> `instrument_metadata_snapshot_features_daily` -> `instrument_metadata_daily_summary`
-- `public/get_index_price` -> `index_price_snapshot_1m` -> `index_price_snapshot_features_1m` -> `index_price_m1_features`
+- `public/get_order_book` -> `l2_snapshot`
+- `public/get_book_summary_by_currency` -> `options_ticker_snapshot_1m`
+- `public/get_instruments` -> `instrument_metadata_snapshot_daily`
+- `public/get_index_price` -> `index_price_snapshot_1m`
 
 ## 4. Architecture
 
@@ -74,9 +71,8 @@ api/
 
 ingestion/
   * bronze normalizers/writers
-  * silver transforms
-  * gold transforms
-  * state, parquet, plotting, and artifact utilities
+  * parquet repository and file locking
+  * runtime configuration
 
 domain/
   source contracts and typed models
@@ -115,12 +111,12 @@ Key controls:
 - Transport: `http.timeout_s`, `http.max_retries`, `http.retry_backoff_s`
 - Runtime: `runtime.fetch_concurrency`, log rotation settings
 - Ingestion: symbols, depth, cadence, runtime budget
-- Lake roots: Bronze/Silver/Gold paths
+- Lake root: `ingestion.lake_root`
 - Per-domain settings: `ingestion.options.*`, `ingestion.instrument_metadata.*`, `ingestion.index_price.*`
 
 Important behavior:
 - `max_runtime_s = 0` disables L2 runtime budget.
-- `options-bronze-builder` currently defaults to saving parquet output.
+- Options, instrument metadata, and index-price Bronze builders default to saving parquet output.
 
 ## 7. CLI Runbook
 
@@ -133,24 +129,6 @@ python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL 
 python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
 ```
 
-### Silver
-
-```bash
-python main.py l2-silver-builder --debug
-python main.py options-silver-builder --debug
-python main.py instrument-metadata-silver-builder --debug
-python main.py index-price-silver-builder --debug
-```
-
-### Gold
-
-```bash
-python main.py l2-gold-builder --debug --plot --fill-missing-minutes --fill-policy kalman
-python main.py options-gold-builder --debug --plot --fill-missing-minutes --fill-policy kalman
-python main.py instrument-metadata-gold-builder --debug --plot --fill-missing-minutes --fill-policy kalman
-python main.py index-price-gold-builder --debug --plot --fill-missing-minutes --fill-policy kalman
-```
-
 ### Utility
 
 ```bash
@@ -161,22 +139,14 @@ python main.py validate-symbols --debug --symbols BTC ETH SOL
 
 ### 8.1 Summary Matrix
 
-| Dataset | Layer | Related endpoint | Tracked range | Silver transformation |
+| Dataset | Layer | Related endpoint | Tracked range | Data semantics |
 |---|---|---|---|---|
-| `l2_snapshot` | Bronze | Deribit `public/get_order_book` | Tick snapshots (`event_time`) | Input to `l2_snapshot_features` |
-| `options_ticker_snapshot_1m` | Bronze | Deribit `public/get_book_summary_by_currency` | Minute snapshots (`snapshot_time`) | Input to `option_chain_features_1m` |
-| `instrument_metadata_snapshot_daily` | Bronze | Deribit `public/get_instruments` | Daily snapshots (`snapshot_date`) | Input to `instrument_metadata_snapshot_features_daily` |
-| `index_price_snapshot_1m` | Bronze | Deribit `public/get_index_price` | Minute snapshots (`snapshot_time`/`event_time`) | Input to `index_price_snapshot_features_1m` |
-| `l2_snapshot_features` | Silver | Derived from `l2_snapshot` | Snapshot cadence, monthly partitions | Spread/microprice/depth-window feature engineering |
-| `option_chain_features_1m` | Silver | Derived from `options_ticker_snapshot_1m` | Minute chain state, monthly partitions | Contract parsing + tenor/moneyness/spread quality features |
-| `instrument_metadata_snapshot_features_daily` | Silver | Derived from `instrument_metadata_snapshot_daily` | Daily, monthly partitions | Adds `month`, `is_option`, `days_to_expiration` |
-| `index_price_snapshot_features_1m` | Silver | Derived from `index_price_snapshot_1m` | Minute, monthly partitions | Adds return features (`price_prev`, `price_delta`, `log_return_1m`) |
-| `l2_m1_features` | Gold | Derived from Silver L2 features | Dense 1-minute timeline per partition | Consumes Silver output |
-| `option_surface_m1` | Gold | Derived from Silver option features | Minute surface summaries | Consumes Silver output |
-| `instrument_metadata_daily_summary` | Gold | Derived from Silver metadata features | Daily summaries | Consumes Silver output |
-| `index_price_m1_features` | Gold | Derived from Silver index features | Minute summaries | Consumes Silver output |
+| `l2_snapshot` | Bronze | Deribit `public/get_order_book` | Tick snapshots (`event_time`) | Raw order-book snapshots |
+| `options_ticker_snapshot_1m` | Bronze | Deribit `public/get_book_summary_by_currency` | Minute snapshots (`snapshot_time`) | Raw option ticker rows |
+| `instrument_metadata_snapshot_daily` | Bronze | Deribit `public/get_instruments` | Daily snapshots (`snapshot_date`) | Raw instrument metadata rows |
+| `index_price_snapshot_1m` | Bronze | Deribit `public/get_index_price` | Minute snapshots (`snapshot_time`/`event_time`) | Raw index-price rows |
 
-### 8.2 Storage Layouts
+### 8.2 Storage Layout
 
 Bronze root:
 
@@ -188,53 +158,21 @@ lake/bronze/
   dataset_type=index_price_snapshot_1m/exchange=<exchange>/index_name=<index_name>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
 ```
 
-Silver root:
-
-```text
-lake/silver/
-  dataset_type=l2_snapshot_features/...
-  dataset_type=option_chain_features_1m/...
-  dataset_type=instrument_metadata_snapshot_features_daily/...
-  dataset_type=index_price_snapshot_features_1m/...
-```
-
-Gold root:
-
-```text
-lake/gold/
-  dataset_type=l2_m1_features/...
-  dataset_type=option_surface_m1/...
-  dataset_type=instrument_metadata_daily_summary/...
-  dataset_type=index_price_m1_features/...
-```
-
-Artifact behavior:
-- Silver L2 and options writers can emit monthly parquet plus optional `.json` manifests and `.png` profiles.
-- Gold L2 and options writers can emit parquet plus optional `.json` manifests and `.png` profiles.
-- Gold instrument-metadata and index-price writers emit `data.parquet` and, when `--plot` is enabled, `data.png`.
-- Gold readers ignore hidden writer scratch parquet paths such as `.staging-*.parquet`.
-
-## 9. Incremental Processing and Idempotency
-
-State files are used to avoid redundant recomputation:
-- Silver: fingerprint Bronze inputs and skip unchanged sets.
-- Gold: fingerprint Silver inputs and skip unchanged sets.
+## 9. Idempotency
 
 Idempotency behavior:
 - Upsert-based datasets merge by natural keys and deterministic sort order.
-- Options Bronze merges rows by snapshot natural key into one parquet file per daily partition.
+- L2 rows are keyed by exchange, instrument type, symbol, depth, source, and event time.
+- Options rows are keyed by exchange, currency, instrument name, source, and snapshot time.
+- Instrument metadata rows are keyed by exchange, instrument name, and snapshot date.
+- Index-price rows are keyed by exchange, index name, event time, and source.
 
 ## 10. Data Quality and Validation
 
 Built-in validation examples:
 - L2 `validate-symbols` checks symbol normalization and top-of-book sanity.
-- Silver L2 emits `is_valid` and `validation_flags`.
-- Silver options emits `quality_flags` and `is_valid_for_surface`.
-
-Gold L2 quality controls:
-- Dense minute timeline with explicit missing-minute representation.
-- Coverage fields: `snapshot_count`, `coverage_ratio`, `is_complete_minute`.
-- Optional fill policies: `neighbor`, `hybrid`, `kalman`.
+- Bronze normalizers reject malformed option instrument names and unsupported option currency mappings.
+- External calls are bounded by configured timeout, retry, and concurrency settings.
 
 ## 11. Observability and Logging
 
@@ -259,14 +197,6 @@ Example production cron:
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-bronze-builder --debug --symbols BTC ETH SOL
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
 15 3 * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind option
-# disabled 2026-06-12 bronze-only: 15 15 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py l2-silver-builder --debug --no-plot --no-manifest
-# disabled 2026-06-12 bronze-only: 15 16 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py options-silver-builder --debug --no-plot --no-manifest
-# disabled 2026-06-12 bronze-only: 15 19 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py instrument-metadata-silver-builder --debug
-# disabled 2026-06-12 bronze-only: 15 20 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py index-price-silver-builder --debug
-# disabled 2026-06-12 bronze-only: 15 17 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py l2-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
-# disabled 2026-06-12 bronze-only: 15 18 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py options-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
-# disabled 2026-06-12 bronze-only: 15 21 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py instrument-metadata-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
-# disabled 2026-06-12 bronze-only: 15 22 * * * cd /home/vcs/git/crypto-live-loader && nice -n 10 .venv/bin/python main.py index-price-gold-builder --debug --plot --no-manifest --fill-missing-minutes --fill-policy kalman
 ```
 
 ## 13. Quality Gates
@@ -287,9 +217,9 @@ make check
 ## 14. Risk Notes and Limitations
 
 - Deribit-only source support.
-- REST polling (no websocket microburst capture).
-- Local parquet storage and local state (no distributed metadata service).
-- Concurrent writers targeting same artifact can race if launched unsafely.
+- REST polling only; websocket microburst capture is out of scope.
+- Local parquet storage only; no distributed metadata service.
+- Concurrent writers targeting the same parquet partition rely on local file locks.
 
 ## 15. Roadmap
 
