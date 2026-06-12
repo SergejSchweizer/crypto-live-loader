@@ -16,7 +16,7 @@ def test_load_config_reads_yaml_defaults(tmp_path: Path) -> None:
 http:
   timeout_s: 30
 runtime:
-  fetch_concurrency: 3
+  log_backup_count: 3
 ingestion:
   symbols: [BTC, SOL]
   snapshot_count: 6
@@ -29,7 +29,7 @@ ingestion:
     runtime_config = config_section(config, "runtime")
     ingestion_config = config_section(config, "ingestion")
 
-    assert config_int(runtime_config, "fetch_concurrency", 0) == 3
+    assert config_int(runtime_config, "log_backup_count", 0) == 3
     assert config_str_list(ingestion_config, "symbols", []) == ["BTC", "SOL"]
     assert config_int(ingestion_config, "snapshot_count", 0) == 6
     assert config_bool(ingestion_config, "save_parquet_lake", False) is True

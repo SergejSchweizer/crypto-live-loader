@@ -126,11 +126,7 @@ async def fetch_l2_snapshots_for_symbols_async(
     concurrency: int | None = None,
     adapter: SourceAdapter | None = None,
 ) -> dict[str, list[L2Snapshot]]:
-    """Collect L2 snapshots for all symbols concurrently on each polling tick.
-
-    This keeps total runtime bounded by polling cycles rather than multiplying
-    runtime by the number of symbols.
-    """
+    """Collect L2 snapshots for all symbols sequentially on each polling tick."""
 
     config = L2FetchConfig(
         exchange=exchange,
@@ -146,7 +142,6 @@ async def fetch_l2_snapshots_for_symbols_async(
 
     deadline = _deadline_from_config(config)
     snapshots_by_symbol: dict[str, list[L2Snapshot]] = {symbol.upper(): [] for symbol in config.symbols}
-    semaphore = asyncio.Semaphore(max(1, config.concurrency or len(config.symbols)))
 
     for index in range(config.snapshot_count):
         if _deadline_reached(deadline):
@@ -156,7 +151,6 @@ async def fetch_l2_snapshots_for_symbols_async(
             symbols=config.symbols,
             depth=config.depth,
             deadline=deadline,
-            semaphore=semaphore,
             adapter=config.adapter or source_adapter_for_exchange(config.exchange),
         )
         _append_tick_snapshots(snapshots_by_symbol=snapshots_by_symbol, tick_snapshots=tick_snapshots)
@@ -208,24 +202,18 @@ async def _collect_l2_tick(
     symbols: list[str],
     depth: int,
     deadline: float | None,
-    semaphore: asyncio.Semaphore,
     adapter: SourceAdapter,
 ) -> list[tuple[str, L2Snapshot]]:
-    """Fetch one concurrent polling tick for all symbols."""
+    """Fetch one sequential polling tick for all symbols."""
 
-    tick_results = await asyncio.gather(
-        *[
-            _fetch_l2_symbol(symbol=symbol, depth=depth, deadline=deadline, semaphore=semaphore, adapter=adapter)
-            for symbol in symbols
-        ],
-        return_exceptions=True,
-    )
     snapshots: list[tuple[str, L2Snapshot]] = []
-    for symbol, result in zip(symbols, tick_results, strict=True):
-        if result is None:
+    for symbol in symbols:
+        try:
+            result = await _fetch_l2_symbol(symbol=symbol, depth=depth, deadline=deadline, adapter=adapter)
+        except Exception as exc:  # noqa: BLE001
+            LOGGER.warning("L2 snapshot fetch failed symbol=%s error=%s", symbol.upper(), exc)
             continue
-        if isinstance(result, BaseException):
-            LOGGER.warning("L2 snapshot fetch failed symbol=%s error=%s", symbol.upper(), result)
+        if result is None:
             continue
         snapshots.append(result)
     return snapshots
@@ -235,17 +223,15 @@ async def _fetch_l2_symbol(
     symbol: str,
     depth: int,
     deadline: float | None,
-    semaphore: asyncio.Semaphore,
     adapter: SourceAdapter,
 ) -> tuple[str, L2Snapshot] | None:
-    """Fetch and normalize one symbol snapshot inside a bounded async tick."""
+    """Fetch and normalize one symbol snapshot inside a sequential async tick."""
 
-    async with semaphore:
-        if _deadline_reached(deadline):
-            return None
-        started_at = monotonic()
-        raw = await asyncio.to_thread(adapter.fetch_snapshot, symbol=symbol, depth=depth)
-        return symbol.upper(), _snapshot_from_raw(raw=raw, fetch_duration_s=monotonic() - started_at)
+    if _deadline_reached(deadline):
+        return None
+    started_at = monotonic()
+    raw = await asyncio.to_thread(adapter.fetch_snapshot, symbol=symbol, depth=depth)
+    return symbol.upper(), _snapshot_from_raw(raw=raw, fetch_duration_s=monotonic() - started_at)
 
 
 def _append_tick_snapshots(

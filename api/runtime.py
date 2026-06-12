@@ -1,4 +1,4 @@
-"""Runtime helpers for CLI logging and concurrency settings."""
+"""Runtime helpers for CLI logging settings."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ LOGGER_NAME = "crypto_live_loader"
 DEFAULT_LOG_DIR = ".logs"
 DEFAULT_LOG_ROTATION_DAYS = 7
 DEFAULT_LOG_BACKUP_COUNT = 0
-DEFAULT_FETCH_CONCURRENCY = 8
 
 
 def _safe_log_module_name(module_name: str) -> str:
@@ -63,11 +62,3 @@ def configure_logging(module_name: str = "crypto-live-loader", config: Config | 
     logger.addHandler(stream_handler)
 
     return logger
-
-
-def fetch_concurrency(config: Config | None = None) -> int:
-    """Return bounded fetch concurrency from config."""
-
-    runtime_config = config_section(config or load_config(), "runtime")
-    value = config_int(runtime_config, "fetch_concurrency", DEFAULT_FETCH_CONCURRENCY)
-    return max(1, value)

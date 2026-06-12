@@ -39,7 +39,7 @@ In scope:
 Operational guarantees:
 - Deterministic partitioning and typed normalization.
 - Idempotent upsert semantics for Bronze parquet files.
-- Bounded runtime and concurrency settings for scheduled collectors.
+- Bounded runtime settings and sequential REST fetching for scheduled collectors.
 - Explicit debug logging for every CLI command.
 
 Out of scope:
@@ -109,14 +109,17 @@ Configuration source of truth:
 
 Key controls:
 - Transport: `http.timeout_s`, `http.max_retries`, `http.retry_backoff_s`
-- Runtime: `runtime.fetch_concurrency`, log rotation settings
+- Runtime: log rotation settings
 - Ingestion: symbols, depth, cadence, runtime budget
 - Lake root: `ingestion.lake_root`
 - Per-domain settings: `ingestion.options.*`, `ingestion.instrument_metadata.*`, `ingestion.index_price.*`
+  and `ingestion.option_instrument_ticker.*`
 
 Important behavior:
 - `max_runtime_s = 0` disables L2 runtime budget.
 - Options, instrument metadata, and index-price Bronze builders default to saving parquet output.
+- The option per-instrument ticker builder stores raw Deribit ticker IV and Greeks snapshots.
+- Discovered option per-instrument ticker fetches rotate through a bounded sequential slice per run.
 
 ## 7. CLI Runbook
 
@@ -125,6 +128,7 @@ Important behavior:
 ```bash
 python main.py l2-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
 python main.py options-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
+python main.py option-instrument-ticker-bronze-builder --debug --symbols BTC ETH SOL --max-instruments-per-run 20
 python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind option
 python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
 ```
@@ -143,6 +147,7 @@ python main.py validate-symbols --debug --symbols BTC ETH SOL
 |---|---|---|---|---|
 | `l2_snapshot` | Bronze | Deribit `public/get_order_book` | Tick snapshots (`event_time`) | Raw order-book snapshots |
 | `options_ticker_snapshot_1m` | Bronze | Deribit `public/get_book_summary_by_currency` | Minute snapshots (`snapshot_time`) | Raw option ticker rows |
+| `option_instrument_ticker_snapshot_1m` | Bronze | Deribit `public/ticker` | Minute snapshots (`snapshot_time`) | Raw per-option IV, Greeks, price, and open-interest rows |
 | `instrument_metadata_snapshot_daily` | Bronze | Deribit `public/get_instruments` | Daily snapshots (`snapshot_date`) | Raw instrument metadata rows |
 | `index_price_snapshot_1m` | Bronze | Deribit `public/get_index_price` | Minute snapshots (`snapshot_time`/`event_time`) | Raw index-price rows |
 
@@ -154,6 +159,7 @@ Bronze root:
 lake/bronze/
   dataset_type=l2_snapshot/exchange=<exchange>/instrument_type=perp/symbol=<symbol>/depth=<depth>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
   dataset_type=options_ticker_snapshot_1m/exchange=<exchange>/instrument_type=option/currency=<currency>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
+  dataset_type=option_instrument_ticker_snapshot_1m/exchange=<exchange>/instrument_type=option/currency=<currency>/instrument_name=<instrument_name>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
   dataset_type=instrument_metadata_snapshot_daily/exchange=<exchange>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
   dataset_type=index_price_snapshot_1m/exchange=<exchange>/index_name=<index_name>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
 ```
@@ -164,6 +170,7 @@ Idempotency behavior:
 - Upsert-based datasets merge by natural keys and deterministic sort order.
 - L2 rows are keyed by exchange, instrument type, symbol, depth, source, and event time.
 - Options rows are keyed by exchange, currency, instrument name, source, and snapshot time.
+- Option per-instrument ticker rows are keyed by exchange, instrument name, source, and snapshot time.
 - Instrument metadata rows are keyed by exchange, instrument name, and snapshot date.
 - Index-price rows are keyed by exchange, index name, event time, and source.
 
@@ -172,7 +179,7 @@ Idempotency behavior:
 Built-in validation examples:
 - L2 `validate-symbols` checks symbol normalization and top-of-book sanity.
 - Bronze normalizers reject malformed option instrument names and unsupported option currency mappings.
-- External calls are bounded by configured timeout, retry, and concurrency settings.
+- External calls are bounded by configured timeout and retry settings.
 
 ## 11. Observability and Logging
 
@@ -195,6 +202,7 @@ Example production cron:
 ```cron
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py l2-bronze-builder --debug --symbols BTC ETH SOL
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-bronze-builder --debug --symbols BTC ETH SOL
+* * * * * cd /home/vcs/git/crypto-live-loader && flock -n .logs/option-instrument-ticker-bronze-builder.cron.lock .venv/bin/python main.py option-instrument-ticker-bronze-builder --debug --symbols BTC ETH SOL --max-instruments-per-run 20
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
 15 3 * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind option
 ```
