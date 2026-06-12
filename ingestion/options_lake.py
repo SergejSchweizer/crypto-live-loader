@@ -9,14 +9,23 @@ from pathlib import Path
 from ingestion.options import OptionTickerSnapshotRow
 from ingestion.parquet_repository import ParquetUpsertRepository
 
-OptionPartitionKey = tuple[str, str, str, str, str, str, str]
+OptionPartitionKey = tuple[str, str, str, str, str, str, str, str]
 OptionNaturalKey = tuple[str, str, str, str, datetime]
 
 
 def option_snapshot_partition_path(lake_root: str, key: OptionPartitionKey) -> Path:
     """Return the bronze destination directory for one option snapshot partition."""
 
-    dataset_type, exchange, instrument_type, currency, year_partition, month_partition, date_partition = key
+    (
+        dataset_type,
+        exchange,
+        instrument_type,
+        currency,
+        year_partition,
+        month_partition,
+        date_partition,
+        hour_partition,
+    ) = key
     return (
         Path(lake_root)
         / f"dataset_type={dataset_type}"
@@ -27,6 +36,7 @@ def option_snapshot_partition_path(lake_root: str, key: OptionPartitionKey) -> P
         / f"year={year_partition}"
         / f"month={month_partition}"
         / f"date={date_partition}"
+        / f"hour={hour_partition}"
     )
 
 
@@ -94,7 +104,7 @@ def save_options_ticker_snapshot_parquet_lake(
     rows_by_currency: dict[str, list[OptionTickerSnapshotRow]],
     lake_root: str,
 ) -> list[str]:
-    """Upsert option snapshot rows into one daily bronze parquet file per partition."""
+    """Upsert option snapshot rows into one hourly bronze parquet file per partition."""
 
     repository = ParquetUpsertRepository()
 
@@ -109,6 +119,7 @@ def save_options_ticker_snapshot_parquet_lake(
                 row.snapshot_time.strftime("%Y"),
                 row.snapshot_time.strftime("%m"),
                 row.snapshot_time.strftime("%d"),
+                row.snapshot_time.strftime("%H"),
             )
             grouped[key].append(options_ticker_snapshot_record(row))
 

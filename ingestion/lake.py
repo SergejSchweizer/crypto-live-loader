@@ -15,7 +15,7 @@ from ingestion.l2 import (
 )
 from ingestion.parquet_repository import ParquetUpsertRepository
 
-SnapshotPartitionKey = tuple[str, str, str, int, str, str, str, str]
+SnapshotPartitionKey = tuple[str, str, str, int, str, str, str, str, str]
 SnapshotNaturalKey = tuple[str, str, str, int, str, datetime]
 
 
@@ -28,7 +28,17 @@ def utc_run_id() -> str:
 def snapshot_partition_path(lake_root: str, key: SnapshotPartitionKey) -> Path:
     """Return the bronze destination directory for one raw L2 snapshot partition."""
 
-    exchange, instrument_type, symbol, depth, source, year_partition, month_partition, date_partition = key
+    (
+        exchange,
+        instrument_type,
+        symbol,
+        depth,
+        source,
+        year_partition,
+        month_partition,
+        date_partition,
+        hour_partition,
+    ) = key
     return (
         Path(lake_root)
         / "dataset_type=l2_snapshot"
@@ -40,6 +50,7 @@ def snapshot_partition_path(lake_root: str, key: SnapshotPartitionKey) -> Path:
         / f"year={year_partition}"
         / f"month={month_partition}"
         / f"date={date_partition}"
+        / f"hour={hour_partition}"
     )
 
 
@@ -65,7 +76,7 @@ def save_l2_snapshot_parquet_lake(
     depth: int,
     source: str = "rest_order_book",
 ) -> list[str]:
-    """Save raw L2 snapshots to daily bronze parquet lake partitions."""
+    """Save raw L2 snapshots to hourly bronze parquet lake partitions."""
 
     run_id = utc_run_id()
     ingested_at = datetime.now(UTC)

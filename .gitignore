@@ -25,6 +25,7 @@
 !sources/**
 !tests/
 !tests/**
+!scripts/migrate_bronze_hourly_layout.py
 !docs/
 !docs/assets/
 !docs/assets/gold_profile_btc_1m_example.png
