@@ -35,17 +35,17 @@ def test_l2_snapshot_partition_path() -> None:
 
     result = snapshot_partition_path(
         "lake/bronze",
-        ("deribit", "perp", "BTC-PERPETUAL", 50, "rest_order_book", "2026", "05", "05"),
+        ("deribit", "perp", "BTC-PERPETUAL", 50, "rest_order_book", "2026", "05", "05", "10"),
     )
 
     assert str(result).endswith(
         "dataset_type=l2_snapshot/exchange=deribit/instrument_type=perp/"
-        "symbol=BTC-PERPETUAL/depth=50/source=rest_order_book/year=2026/month=05/date=05"
+        "symbol=BTC-PERPETUAL/depth=50/source=rest_order_book/year=2026/month=05/date=05/hour=10"
     )
 
 
-def test_save_l2_snapshot_parquet_lake_uses_daily_bronze_layout(tmp_path: Path) -> None:
-    """Verify raw L2 snapshots are written to daily bronze partitions."""
+def test_save_l2_snapshot_parquet_lake_uses_hourly_bronze_layout(tmp_path: Path) -> None:
+    """Verify raw L2 snapshots are written to hourly bronze partitions."""
 
     snapshot_1 = _sample_l2_snapshot(second=1)
     snapshot_2 = _sample_l2_snapshot(second=2, day=6)
@@ -60,13 +60,13 @@ def test_save_l2_snapshot_parquet_lake_uses_daily_bronze_layout(tmp_path: Path) 
     assert any(
         "/dataset_type=l2_snapshot/exchange=deribit/instrument_type=perp/"
         "symbol=BTC-PERPETUAL/depth=50/source=rest_order_book/year=2026/month=05/"
-        "date=05/data.parquet" in file_path
+        "date=05/hour=10/data.parquet" in file_path
         for file_path in files
     )
     assert any(
         "/dataset_type=l2_snapshot/exchange=deribit/instrument_type=perp/"
         "symbol=BTC-PERPETUAL/depth=50/source=rest_order_book/year=2026/month=05/"
-        "date=06/data.parquet" in file_path
+        "date=06/hour=10/data.parquet" in file_path
         for file_path in files
     )
 

@@ -31,10 +31,10 @@ def _sample_row(index_name: str = "btc_usd") -> IndexPriceSnapshotRow:
 def test_index_price_partition_path() -> None:
     result = index_price_partition_path(
         "lake/bronze",
-        ("index_price_snapshot_1m", "deribit", "btc_usd", "2026", "05", "24"),
+        ("index_price_snapshot_1m", "deribit", "btc_usd", "2026", "05", "24", "07"),
     )
     assert str(result).endswith(
-        "dataset_type=index_price_snapshot_1m/exchange=deribit/index_name=btc_usd/year=2026/month=05/date=24"
+        "dataset_type=index_price_snapshot_1m/exchange=deribit/index_name=btc_usd/year=2026/month=05/date=24/hour=07"
     )
 
 

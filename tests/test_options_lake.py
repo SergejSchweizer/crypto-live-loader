@@ -58,16 +58,16 @@ def test_bronze_partition_path() -> None:
 
     result = option_snapshot_partition_path(
         "lake/bronze",
-        ("options_ticker_snapshot_1m", "deribit", "option", "BTC", "2026", "05", "24"),
+        ("options_ticker_snapshot_1m", "deribit", "option", "BTC", "2026", "05", "24", "07"),
     )
     assert str(result).endswith(
         "dataset_type=options_ticker_snapshot_1m/exchange=deribit/instrument_type=option/currency=BTC/"
-        "source=rest_get_book_summary_by_currency/year=2026/month=05/date=24"
+        "source=rest_get_book_summary_by_currency/year=2026/month=05/date=24/hour=07"
     )
 
 
-def test_save_options_ticker_snapshot_parquet_lake_writes_daily_file(tmp_path: Path) -> None:
-    """Option bronze writer should persist one upserted parquet file per day."""
+def test_save_options_ticker_snapshot_parquet_lake_writes_hourly_file(tmp_path: Path) -> None:
+    """Option bronze writer should persist one upserted parquet file per hour."""
 
     files = save_options_ticker_snapshot_parquet_lake(
         rows_by_currency={"BTC": [_sample_row(), _sample_row(instrument_name="BTC-30JUN26-130000-C", minute=16)]},
@@ -83,7 +83,7 @@ def test_save_options_ticker_snapshot_parquet_lake_writes_daily_file(tmp_path: P
     assert rows[1]["instrument_name"] == "BTC-30JUN26-130000-C"
 
 
-def test_save_options_ticker_snapshot_parquet_lake_upserts_daily_file(tmp_path: Path) -> None:
+def test_save_options_ticker_snapshot_parquet_lake_upserts_hourly_file(tmp_path: Path) -> None:
     """Option bronze writer should merge repeat writes by natural key."""
 
     first = _sample_row()

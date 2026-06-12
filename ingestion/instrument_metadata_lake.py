@@ -8,14 +8,14 @@ from pathlib import Path
 from ingestion.instrument_metadata import InstrumentMetadataSnapshotRow
 from ingestion.parquet_repository import ParquetUpsertRepository
 
-InstrumentMetadataPartitionKey = tuple[str, str, str, str, str]
+InstrumentMetadataPartitionKey = tuple[str, str, str, str, str, str]
 InstrumentMetadataNaturalKey = tuple[str, str, str]
 
 
 def instrument_metadata_partition_path(lake_root: str, key: InstrumentMetadataPartitionKey) -> Path:
-    """Return destination directory for one daily instrument metadata partition."""
+    """Return destination directory for one hourly instrument metadata partition."""
 
-    dataset_type, exchange, year_partition, month_partition, date_partition = key
+    dataset_type, exchange, year_partition, month_partition, date_partition, hour_partition = key
     return (
         Path(lake_root)
         / f"dataset_type={dataset_type}"
@@ -23,6 +23,7 @@ def instrument_metadata_partition_path(lake_root: str, key: InstrumentMetadataPa
         / f"year={year_partition}"
         / f"month={month_partition}"
         / f"date={date_partition}"
+        / f"hour={hour_partition}"
     )
 
 
@@ -68,7 +69,7 @@ def save_instrument_metadata_snapshot_parquet_lake(
     rows_by_date: dict[str, list[InstrumentMetadataSnapshotRow]],
     lake_root: str,
 ) -> list[str]:
-    """Persist daily instrument metadata rows as idempotent bronze parquet files."""
+    """Persist instrument metadata rows as idempotent hourly bronze parquet files."""
     repository = ParquetUpsertRepository()
 
     grouped: defaultdict[InstrumentMetadataPartitionKey, list[dict[str, object]]] = defaultdict(list)
@@ -80,6 +81,7 @@ def save_instrument_metadata_snapshot_parquet_lake(
                 row.snapshot_date.strftime("%Y"),
                 row.snapshot_date.strftime("%m"),
                 row.snapshot_date.strftime("%d"),
+                "00",
             )
             grouped[key].append(instrument_metadata_snapshot_record(row))
 

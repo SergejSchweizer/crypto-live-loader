@@ -330,7 +330,7 @@ def l2_snapshot_partition_key(
     snapshot: L2Snapshot,
     depth: int,
     source: str,
-) -> tuple[str, str, str, int, str, str, str, str]:
+) -> tuple[str, str, str, int, str, str, str, str, str]:
     """Build raw bronze partition key for an L2 snapshot."""
 
     return (
@@ -342,4 +342,5 @@ def l2_snapshot_partition_key(
         snapshot.timestamp.strftime("%Y"),
         snapshot.timestamp.strftime("%m"),
         snapshot.timestamp.strftime("%d"),
+        snapshot.timestamp.strftime("%H"),
     )
