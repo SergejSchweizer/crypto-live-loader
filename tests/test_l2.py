@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from threading import Event, Lock
 
 import pytest
 
@@ -34,22 +33,15 @@ class _StubAdapter:
         )
 
 
-def test_fetch_l2_snapshots_for_symbols_polls_all_symbols_each_tick(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fetch_l2_snapshots_for_symbols_fetches_symbols_sequentially(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[tuple[str, str]] = []
-    lock = Lock()
-    both_started = Event()
 
     class Adapter(_StubAdapter):
         def fetch_snapshot(self, symbol: str, depth: int) -> RawSnapshot:
             del depth
-            with lock:
-                events.append(("start", symbol))
-                if len([event for event in events if event[0] == "start"]) == 2:
-                    both_started.set()
-            both_started.wait(timeout=0.5)
-            with lock:
-                events.append(("finish", symbol))
-                event_count = len(events)
+            events.append(("start", symbol))
+            events.append(("finish", symbol))
+            event_count = len(events)
             return RawSnapshot(
                 exchange="deribit",
                 symbol=f"{symbol}-PERPETUAL",
@@ -75,8 +67,7 @@ def test_fetch_l2_snapshots_for_symbols_polls_all_symbols_each_tick(monkeypatch:
         adapter=Adapter(),
     )
 
-    assert events[0][0] == "start"
-    assert events[1][0] == "start"
+    assert events == [("start", "BTC"), ("finish", "BTC"), ("start", "ETH"), ("finish", "ETH")]
     assert len(snapshots["BTC"]) == 1
     assert len(snapshots["ETH"]) == 1
 

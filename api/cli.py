@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import argparse
-import asyncio
 import json
 import logging
+import re
 from collections.abc import Callable, Mapping
 from dataclasses import asdict
 from datetime import UTC, datetime
+from pathlib import Path
 from time import perf_counter
 from typing import TypeAlias, cast
 
@@ -17,13 +18,11 @@ from api.constants import (
     INDEX_PRICE_BRONZE_BUILDER_COMMAND,
     INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
     LEGACY_BRONZE_BUILDER_COMMAND,
+    OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
     OPTIONS_BRONZE_BUILDER_COMMAND,
     VALIDATE_SYMBOLS_COMMAND,
 )
-from api.runtime import (
-    configure_logging,
-    fetch_concurrency,
-)
+from api.runtime import configure_logging
 from domain.models import RawSnapshot
 from ingestion.config import (
     Config,
@@ -63,6 +62,20 @@ from ingestion.instrument_metadata import (
 from ingestion.instrument_metadata_lake import save_instrument_metadata_snapshot_parquet_lake
 from ingestion.l2 import L2Snapshot, fetch_l2_snapshots_for_symbols
 from ingestion.lake import save_l2_snapshot_parquet_lake
+from ingestion.option_instrument_ticker import (
+    OPTION_INSTRUMENT_TICKER_DATASET_TYPE,
+    OPTION_INSTRUMENT_TICKER_SCHEMA_VERSION,
+    OPTION_INSTRUMENT_TICKER_SOURCE,
+    OptionInstrumentTickerSnapshotRow,
+    normalize_option_instrument_ticker_rows,
+)
+from ingestion.option_instrument_ticker import (
+    snapshot_time_floor_minute as option_instrument_ticker_snapshot_time_floor_minute,
+)
+from ingestion.option_instrument_ticker import (
+    utc_run_id as option_instrument_ticker_utc_run_id,
+)
+from ingestion.option_instrument_ticker_lake import save_option_instrument_ticker_snapshot_parquet_lake
 from ingestion.options import (
     OPTION_TICKER_DATASET_TYPE,
     OPTION_TICKER_SCHEMA_VERSION,
@@ -75,6 +88,7 @@ from ingestion.options import (
 from ingestion.options_lake import save_options_ticker_snapshot_parquet_lake
 from sources.deribit_index_price import fetch_index_price
 from sources.deribit_instruments import fetch_instruments
+from sources.deribit_option_ticker import fetch_option_ticker
 from sources.deribit_options import (
     fetch_option_book_summary_rows,
     resolve_options_currency_request,
@@ -85,6 +99,7 @@ __all__ = ["build_parser", "main"]
 
 SnapshotsBySymbol = dict[str, list[L2Snapshot]]
 OptionRowsByCurrency = dict[str, list[OptionTickerSnapshotRow]]
+OptionInstrumentTickerRowsByInstrument = dict[str, OptionInstrumentTickerSnapshotRow]
 InstrumentMetadataRowsByDate = dict[str, list[InstrumentMetadataSnapshotRow]]
 IndexPriceRowsBySymbol = dict[str, list[IndexPriceSnapshotRow]]
 CommandHandler: TypeAlias = Callable[[argparse.Namespace, logging.Logger, Config], None]
@@ -236,6 +251,76 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         help="Print JSON output",
     )
     _debug_flag(options_parser)
+
+    option_instrument_ticker_config = config_section(ingestion_config, "option_instrument_ticker")
+    option_instrument_ticker_parser = subparsers.add_parser(
+        OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
+        help="Fetch Deribit per-option ticker IV and Greeks into the bronze parquet lake",
+    )
+    option_instrument_ticker_parser.add_argument(
+        "--exchange",
+        choices=["deribit"],
+        default="deribit",
+    )
+    option_instrument_ticker_parser.add_argument(
+        "--symbols",
+        "--currencies",
+        dest="currencies",
+        nargs="+",
+        default=config_str_list(option_instrument_ticker_config, "currencies", ["BTC", "ETH", "SOL"]),
+        type=str,
+        help="Option symbols/currencies used when discovering active instruments",
+    )
+    option_instrument_ticker_parser.add_argument(
+        "--instruments",
+        nargs="+",
+        default=config_str_list(option_instrument_ticker_config, "instruments", []),
+        type=str,
+        help="Explicit Deribit option instruments to fetch; skips currency discovery when provided",
+    )
+    option_instrument_ticker_parser.add_argument(
+        "--lake-root",
+        default=config_str(option_instrument_ticker_config, "lake_root", "lake/bronze"),
+        help="Root directory for parquet lake files",
+    )
+    option_instrument_ticker_parser.add_argument(
+        "--max-instruments-per-run",
+        type=int,
+        default=config_int(option_instrument_ticker_config, "max_instruments_per_run", 20),
+        help="Maximum discovered option instruments to fetch sequentially per run",
+    )
+    option_instrument_ticker_parser.add_argument(
+        "--state-dir",
+        default=config_str(option_instrument_ticker_config, "state_dir", ".state"),
+        help="Runtime state directory for rotating discovered option instruments",
+    )
+    _boolean_optional_flag(
+        option_instrument_ticker_parser,
+        "save-parquet-lake",
+        config_bool(option_instrument_ticker_config, "save_parquet_lake", True),
+        "Save per-option ticker snapshots to bronze parquet lake partitions",
+    )
+    option_instrument_ticker_parser.add_argument(
+        "--schema-version",
+        default=config_str(option_instrument_ticker_config, "schema_version", OPTION_INSTRUMENT_TICKER_SCHEMA_VERSION),
+        help="Schema version tag to annotate each normalized row",
+    )
+    option_instrument_ticker_parser.add_argument(
+        "--source",
+        default=config_str(option_instrument_ticker_config, "source", OPTION_INSTRUMENT_TICKER_SOURCE),
+        help="Source identifier written to bronze rows",
+    )
+    _boolean_optional_flag(
+        option_instrument_ticker_parser,
+        "json-output",
+        config_bool(
+            option_instrument_ticker_config,
+            "json_output",
+            config_bool(ingestion_config, "json_output", True),
+        ),
+        "Print JSON output",
+    )
+    _debug_flag(option_instrument_ticker_parser)
 
     instrument_metadata_config = config_section(ingestion_config, "instrument_metadata")
     instrument_metadata_parser = subparsers.add_parser(
@@ -409,6 +494,15 @@ def _normalize_cli_index_symbols(values: list[str]) -> list[str]:
     return symbols
 
 
+def _normalize_cli_instruments(values: list[str]) -> list[str]:
+    """Normalize CLI instrument values from space- or comma-delimited inputs."""
+
+    instruments: list[str] = []
+    for value in values:
+        instruments.extend(item.strip().upper() for item in value.replace(",", " ").split() if item.strip())
+    return sorted(dict.fromkeys(instruments))
+
+
 def _emit_json_output(enabled: bool, payload: Mapping[str, object]) -> None:
     """Print one JSON payload when output is enabled."""
 
@@ -444,29 +538,39 @@ def _log_job_event(
     logger.log(level, "job_event command=%s event=%s %s", command, event, _format_log_fields(fields))
 
 
-async def _fetch_options_rows_for_currencies(
+def _fetch_options_rows_for_currencies(
     currencies: list[str],
-    concurrency: int,
 ) -> tuple[dict[str, list[dict[str, object]]], dict[str, str], dict[str, str]]:
-    """Fetch option summary rows concurrently for all requested currencies."""
+    """Fetch option summary rows sequentially for all requested currencies."""
 
-    semaphore = asyncio.Semaphore(max(1, concurrency))
     rows_by_currency: dict[str, list[dict[str, object]]] = {}
     source_currency_by_requested: dict[str, str] = {}
     errors: dict[str, str] = {}
 
-    async def _fetch_one(currency: str) -> None:
+    for currency in currencies:
         request = resolve_options_currency_request(currency)
         source_currency_by_requested[request.requested_currency] = request.source_currency
         try:
-            async with semaphore:
-                rows = await asyncio.to_thread(fetch_option_book_summary_rows, request)
-            rows_by_currency[request.requested_currency] = rows
+            rows_by_currency[request.requested_currency] = fetch_option_book_summary_rows(request)
         except Exception as exc:  # noqa: BLE001
             errors[request.requested_currency] = str(exc)
-
-    await asyncio.gather(*[_fetch_one(currency) for currency in currencies])
     return rows_by_currency, source_currency_by_requested, errors
+
+
+def _fetch_option_ticker_rows_for_instruments(
+    instruments: list[str],
+) -> tuple[dict[str, dict[str, object]], dict[str, str]]:
+    """Fetch per-instrument option ticker rows sequentially."""
+
+    rows_by_instrument: dict[str, dict[str, object]] = {}
+    errors: dict[str, str] = {}
+
+    for instrument_name in instruments:
+        try:
+            rows_by_instrument[instrument_name] = fetch_option_ticker(instrument_name)
+        except Exception as exc:  # noqa: BLE001
+            errors[instrument_name] = str(exc)
+    return rows_by_instrument, errors
 
 
 def _log_bronze_builder_summary(
@@ -634,7 +738,6 @@ def _run_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config
         snapshot_count=requested_snapshots,
         poll_interval_s=float(args.poll_interval_s),
         max_runtime_s=max_runtime_s if max_runtime_s > 0 else None,
-        concurrency=fetch_concurrency(config),
     )
 
     output = _build_snapshot_output(
@@ -674,12 +777,9 @@ def _run_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger
     run_id = utc_run_id()
     snapshot_time = snapshot_time_floor_minute()
     ingested_at = datetime.now(UTC)
-    ingestion_config = config_section(config, "ingestion")
-    options_config = config_section(ingestion_config, "options")
-    fetch_conc = max(1, config_int(options_config, "fetch_concurrency", 3))
 
-    raw_rows_by_currency, source_currency_by_requested, fetch_errors = asyncio.run(
-        _fetch_options_rows_for_currencies(currencies=currencies, concurrency=fetch_conc)
+    raw_rows_by_currency, source_currency_by_requested, fetch_errors = _fetch_options_rows_for_currencies(
+        currencies=currencies
     )
 
     rows_by_currency: OptionRowsByCurrency = {}
@@ -746,6 +846,208 @@ def _run_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger
         errors=len(errors),
         files=len(output_files),
         rows_written=output["rows_written"],
+        run_id=run_id,
+        snapshot_time=output["snapshot_time"],
+        status="complete" if not errors else "partial",
+    )
+
+
+def _discover_option_ticker_instruments_by_currency(
+    currencies: list[str], explicit_instruments: list[str]
+) -> tuple[dict[str, list[str]], list[str]]:
+    """Return explicit or discovered Deribit option instruments grouped by requested currency."""
+
+    normalized_explicit = _normalize_cli_instruments(explicit_instruments)
+    if normalized_explicit:
+        return {"explicit": normalized_explicit}, []
+
+    instruments_by_currency: dict[str, list[str]] = {}
+    errors: list[str] = []
+    for currency in currencies:
+        try:
+            request = resolve_options_currency_request(currency)
+            currency_instruments: list[str] = []
+            rows = fetch_instruments(currency=request.source_currency, kind="option", expired=False)
+            for row in rows:
+                instrument_name = row.get("instrument_name")
+                if not isinstance(instrument_name, str):
+                    continue
+                if request.instrument_prefix is None or instrument_name.startswith(request.instrument_prefix):
+                    currency_instruments.append(instrument_name.upper())
+            instruments_by_currency[currency] = sorted(dict.fromkeys(currency_instruments))
+        except Exception as exc:  # noqa: BLE001
+            errors.append(f"{currency}: {exc}")
+            instruments_by_currency[currency] = []
+    return instruments_by_currency, errors
+
+
+def _option_ticker_cursor_path(state_dir: str, exchange: str, currencies: list[str], source: str) -> Path:
+    """Return the cursor state path for rotating discovered option ticker instruments."""
+
+    cursor_key = "-".join([exchange, *currencies, source]).lower()
+    safe_key = re.sub(r"[^a-z0-9_.-]+", "-", cursor_key).strip("-") or "default"
+    return Path(state_dir) / f"option-instrument-ticker-{safe_key}.json"
+
+
+def _read_option_ticker_cursor(cursor_path: Path) -> int:
+    """Read the next discovered-instrument cursor index from disk."""
+
+    if not cursor_path.exists():
+        return 0
+    payload = json.loads(cursor_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or not isinstance(payload.get("next_index"), int):
+        raise ValueError(f"Invalid option ticker cursor file: {cursor_path}")
+    next_index = int(payload["next_index"])
+    if next_index < 0:
+        raise ValueError(f"Invalid negative option ticker cursor index: {cursor_path}")
+    return next_index
+
+
+def _write_option_ticker_cursor(cursor_path: Path, next_index: int) -> None:
+    """Persist the next discovered-instrument cursor index."""
+
+    cursor_path.parent.mkdir(parents=True, exist_ok=True)
+    cursor_path.write_text(json.dumps({"next_index": next_index}, sort_keys=True), encoding="utf-8")
+
+
+def _select_option_ticker_instruments(
+    instruments: list[str],
+    *,
+    explicit_instruments: list[str],
+    max_instruments_per_run: int,
+    cursor_path: Path,
+) -> tuple[list[str], int | None]:
+    """Select one sequential fetch slice, rotating discovered instruments across runs."""
+
+    if explicit_instruments or not instruments:
+        return instruments, None
+
+    requested_count = min(max(1, max_instruments_per_run), len(instruments))
+    start_index = _read_option_ticker_cursor(cursor_path) % len(instruments)
+    selected = [instruments[(start_index + offset) % len(instruments)] for offset in range(requested_count)]
+    next_index = (start_index + len(selected)) % len(instruments)
+    return selected, next_index
+
+
+def _select_option_ticker_instruments_by_currency(
+    instruments_by_currency: dict[str, list[str]],
+    *,
+    explicit_instruments: list[str],
+    max_instruments_per_run: int,
+    state_dir: str,
+    exchange: str,
+    source: str,
+) -> tuple[list[str], dict[str, int | None]]:
+    """Select one bounded rotating slice for each requested option currency."""
+
+    if explicit_instruments:
+        return instruments_by_currency.get("explicit", []), {"explicit": None}
+
+    selected: list[str] = []
+    next_indices: dict[str, int | None] = {}
+    for currency, currency_instruments in instruments_by_currency.items():
+        cursor_path = _option_ticker_cursor_path(
+            state_dir=state_dir,
+            exchange=exchange,
+            currencies=[currency],
+            source=source,
+        )
+        currency_selection, next_index = _select_option_ticker_instruments(
+            currency_instruments,
+            explicit_instruments=[],
+            max_instruments_per_run=max_instruments_per_run,
+            cursor_path=cursor_path,
+        )
+        selected.extend(currency_selection)
+        next_indices[currency] = next_index
+        if next_index is not None:
+            _write_option_ticker_cursor(cursor_path=cursor_path, next_index=next_index)
+    return selected, next_indices
+
+
+def _run_option_instrument_ticker_bronze_builder(
+    args: argparse.Namespace,
+    logger: logging.Logger,
+) -> None:
+    """Run Deribit per-instrument option ticker collection and optional Bronze persistence."""
+
+    started_at = perf_counter()
+    currencies = _normalize_cli_currencies(cast(list[str], args.currencies))
+    explicit_instruments = _normalize_cli_instruments(cast(list[str], args.instruments))
+    instruments_by_currency, discovery_errors = _discover_option_ticker_instruments_by_currency(
+        currencies=currencies,
+        explicit_instruments=explicit_instruments,
+    )
+    run_id = option_instrument_ticker_utc_run_id()
+    snapshot_time = option_instrument_ticker_snapshot_time_floor_minute()
+    ingested_at = datetime.now(UTC)
+    instruments, cursor_next_indices = _select_option_ticker_instruments_by_currency(
+        instruments_by_currency,
+        explicit_instruments=explicit_instruments,
+        max_instruments_per_run=int(args.max_instruments_per_run),
+        state_dir=cast(str, args.state_dir),
+        exchange=cast(str, args.exchange),
+        source=cast(str, args.source),
+    )
+
+    raw_rows_by_instrument, fetch_errors = _fetch_option_ticker_rows_for_instruments(instruments=instruments)
+    rows, normalization_errors = normalize_option_instrument_ticker_rows(
+        raw_rows_by_instrument,
+        run_id=run_id,
+        snapshot_time=snapshot_time,
+        ingested_at=ingested_at,
+        source=cast(str, args.source),
+        schema_version=cast(str, args.schema_version),
+    )
+
+    output_files: list[str] = []
+    if bool(args.save_parquet_lake):
+        output_files = save_option_instrument_ticker_snapshot_parquet_lake(
+            rows=rows,
+            lake_root=cast(str, args.lake_root),
+        )
+
+    errors = discovery_errors + list(fetch_errors.values()) + normalization_errors
+    instruments_discovered = sum(len(currency_instruments) for currency_instruments in instruments_by_currency.values())
+    currency_results = {
+        currency: {
+            "instruments_discovered": len(currency_instruments),
+            "instruments_requested": len(
+                [instrument for instrument in instruments if instrument in currency_instruments]
+            ),
+            "cursor_next_index": cursor_next_indices.get(currency),
+        }
+        for currency, currency_instruments in instruments_by_currency.items()
+    }
+    output = {
+        "command": OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
+        "exchange": cast(str, args.exchange),
+        "dataset_type": OPTION_INSTRUMENT_TICKER_DATASET_TYPE,
+        "run_id": run_id,
+        "snapshot_time": snapshot_time.isoformat().replace("+00:00", "Z"),
+        "requested_currencies": currencies,
+        "instruments_discovered": instruments_discovered,
+        "instruments_requested": len(instruments),
+        "cursor_next_indices": cursor_next_indices,
+        "currency_results": currency_results,
+        "rows_written": len(rows),
+        "output_files": output_files,
+        "errors": errors,
+    }
+    _emit_json_output(bool(args.json_output), output)
+    _log_job_event(
+        logger,
+        logging.INFO,
+        OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
+        "run_summary",
+        currencies=currencies,
+        elapsed_s=perf_counter() - started_at,
+        errors=len(errors),
+        files=len(output_files),
+        instruments_discovered=instruments_discovered,
+        instruments_requested=len(instruments),
+        cursor_next_indices=cursor_next_indices,
+        rows_written=len(rows),
         run_id=run_id,
         snapshot_time=output["snapshot_time"],
         status="complete" if not errors else "partial",
@@ -955,6 +1257,15 @@ def _handle_options_bronze_builder(args: argparse.Namespace, logger: logging.Log
     _run_options_bronze_builder(args=args, logger=logger, config=config)
 
 
+def _handle_option_instrument_ticker_bronze_builder(
+    args: argparse.Namespace,
+    logger: logging.Logger,
+    config: Config,
+) -> None:
+    _ = config
+    _run_option_instrument_ticker_bronze_builder(args=args, logger=logger)
+
+
 def _handle_instrument_metadata_bronze_builder(
     args: argparse.Namespace, logger: logging.Logger, config: Config
 ) -> None:
@@ -978,6 +1289,7 @@ def command_handlers() -> dict[str, CommandHandler]:
     return {
         BRONZE_BUILDER_COMMAND: _handle_bronze_builder,
         OPTIONS_BRONZE_BUILDER_COMMAND: _handle_options_bronze_builder,
+        OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND: _handle_option_instrument_ticker_bronze_builder,
         INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND: _handle_instrument_metadata_bronze_builder,
         INDEX_PRICE_BRONZE_BUILDER_COMMAND: _handle_index_price_bronze_builder,
         VALIDATE_SYMBOLS_COMMAND: _handle_validate_symbols,

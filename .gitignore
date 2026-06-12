@@ -45,6 +45,7 @@ lake/
 plots/
 exports/
 .run/
+.state/
 lake_test/
 .env
 .env.*

@@ -15,6 +15,7 @@ from api.constants import (
     BRONZE_BUILDER_COMMAND,
     INDEX_PRICE_BRONZE_BUILDER_COMMAND,
     INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
+    OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
     OPTIONS_BRONZE_BUILDER_COMMAND,
     VALIDATE_SYMBOLS_COMMAND,
 )
@@ -56,7 +57,6 @@ def _config(
             "log_dir": log_dir,
             "log_rotation_days": 7,
             "log_backup_count": 0,
-            "fetch_concurrency": 8,
         },
         "ingestion": {
             "exchange": "deribit",
@@ -176,6 +176,12 @@ def test_cron_layer_commands_accept_debug_flag() -> None:
     commands = [
         [BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL"],
         [OPTIONS_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL"],
+        [
+            OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
+            "--debug",
+            "--instruments",
+            "BTC-26JUN26-120000-C",
+        ],
         [INDEX_PRICE_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "btc_usd", "eth_usd", "sol_usdc"],
         [INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL", "--kind", "option"],
     ]

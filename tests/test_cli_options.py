@@ -34,7 +34,6 @@ def _isolate_cli_test_logs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
             "options": {
                 "enabled": True,
                 "currencies": ["BTC", "ETH", "SOL"],
-                "fetch_concurrency": 3,
                 "save_parquet_lake": True,
                 "lake_root": "lake/bronze",
                 "source": "rest_get_book_summary_by_currency",
@@ -88,8 +87,8 @@ def test_cli_options_bronze_builder_outputs_json(
 ) -> None:
     """CLI should render concise JSON summary for options bronze run."""
 
-    async def fake_fetch(currencies: list[str], concurrency: int) -> FetchResult:
-        _ = (currencies, concurrency)
+    def fake_fetch(currencies: list[str]) -> FetchResult:
+        _ = currencies
         return (
             {"BTC": [{"instrument_name": "BTC-30JUN26-120000-C"}], "ETH": [], "SOL": []},
             {"BTC": "BTC", "ETH": "ETH", "SOL": "USDC"},
@@ -144,8 +143,8 @@ def test_partial_currency_failure_still_writes_successful_assets(
 ) -> None:
     """A failed currency should not block successful currency writes."""
 
-    async def fake_fetch(currencies: list[str], concurrency: int) -> FetchResult:
-        _ = (currencies, concurrency)
+    def fake_fetch(currencies: list[str]) -> FetchResult:
+        _ = currencies
         return (
             {
                 "BTC": [{"instrument_name": "BTC-30JUN26-120000-C"}],
@@ -208,8 +207,7 @@ def test_options_bronze_legacy_currencies_flag_is_still_supported(
 ) -> None:
     """Legacy --currencies alias should remain accepted."""
 
-    async def fake_fetch(currencies: list[str], concurrency: int) -> FetchResult:
-        _ = concurrency
+    def fake_fetch(currencies: list[str]) -> FetchResult:
         return ({currency: [] for currency in currencies}, {currency: currency for currency in currencies}, {})
 
     monkeypatch.setattr(cli, "_fetch_options_rows_for_currencies", fake_fetch)
