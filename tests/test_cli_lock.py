@@ -13,12 +13,14 @@ import pytest
 from api import cli
 from api.constants import (
     BRONZE_BUILDER_COMMAND,
+    FUTURES_SUMMARY_BRONZE_BUILDER_COMMAND,
     INDEX_PRICE_BRONZE_BUILDER_COMMAND,
     INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
     OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
     OPTIONS_BRONZE_BUILDER_COMMAND,
     RECENT_TRADES_BRONZE_BUILDER_COMMAND,
     VALIDATE_SYMBOLS_COMMAND,
+    VOLATILITY_INDEX_BRONZE_BUILDER_COMMAND,
 )
 from api.runtime import configure_logging
 from domain.models import OrderLevel, RawSnapshot
@@ -177,6 +179,7 @@ def test_cron_layer_commands_accept_debug_flag() -> None:
     commands = [
         [BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL"],
         [OPTIONS_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL"],
+        [FUTURES_SUMMARY_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL"],
         [
             OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
             "--debug",
@@ -184,6 +187,7 @@ def test_cron_layer_commands_accept_debug_flag() -> None:
             "BTC-26JUN26-120000-C",
         ],
         [INDEX_PRICE_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "btc_usd", "eth_usd", "sol_usdc"],
+        [VOLATILITY_INDEX_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL"],
         [RECENT_TRADES_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL"],
         [INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND, "--debug", "--symbols", "BTC", "ETH", "SOL", "--kind", "option"],
     ]

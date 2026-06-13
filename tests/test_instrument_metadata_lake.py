@@ -30,6 +30,9 @@ def _sample_row(instrument_name: str = "BTC-30JUN26-120000-C") -> InstrumentMeta
         counter_currency=None,
         settlement_currency="BTC",
         instrument_type="reversed",
+        settlement_period=None,
+        price_index="btc_usd",
+        state="open",
         tick_size=0.1,
         contract_size=1.0,
         min_trade_amount=0.1,
@@ -60,3 +63,5 @@ def test_save_instrument_metadata_snapshot_parquet_lake_writes_partitioned_file(
     assert len(files) == 1
     rows = pq.ParquetFile(files[0]).read().to_pylist()  # type: ignore[no-untyped-call]
     assert rows[0]["instrument_name"] == "BTC-30JUN26-120000-C"
+    assert rows[0]["price_index"] == "btc_usd"
+    assert rows[0]["state"] == "open"

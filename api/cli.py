@@ -13,6 +13,7 @@ from typing import TypeAlias, cast
 
 from api.constants import (
     BRONZE_BUILDER_COMMAND,
+    FUTURES_SUMMARY_BRONZE_BUILDER_COMMAND,
     INDEX_PRICE_BRONZE_BUILDER_COMMAND,
     INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
     LEGACY_BRONZE_BUILDER_COMMAND,
@@ -20,6 +21,7 @@ from api.constants import (
     OPTIONS_BRONZE_BUILDER_COMMAND,
     RECENT_TRADES_BRONZE_BUILDER_COMMAND,
     VALIDATE_SYMBOLS_COMMAND,
+    VOLATILITY_INDEX_BRONZE_BUILDER_COMMAND,
 )
 from api.runtime import configure_logging
 from domain.models import RawSnapshot
@@ -33,6 +35,20 @@ from ingestion.config import (
     config_str_list,
     load_config,
 )
+from ingestion.futures_summary import (
+    FUTURES_SUMMARY_DATASET_TYPE,
+    FUTURES_SUMMARY_SCHEMA_VERSION,
+    FUTURES_SUMMARY_SOURCE,
+    FuturesSummarySnapshotRow,
+    normalize_futures_summary_rows,
+)
+from ingestion.futures_summary import (
+    snapshot_time_floor_minute as futures_summary_snapshot_time_floor_minute,
+)
+from ingestion.futures_summary import (
+    utc_run_id as futures_summary_utc_run_id,
+)
+from ingestion.futures_summary_lake import save_futures_summary_snapshot_parquet_lake
 from ingestion.index_price import (
     INDEX_PRICE_DATASET_TYPE,
     INDEX_PRICE_SCHEMA_VERSION,
@@ -48,6 +64,7 @@ from ingestion.index_price import (
 )
 from ingestion.index_price_lake import save_index_price_snapshot_parquet_lake
 from ingestion.instrument_metadata import (
+    FUTURE_INSTRUMENT_METADATA_DATASET_TYPE,
     INSTRUMENT_METADATA_DATASET_TYPE,
     INSTRUMENT_METADATA_SCHEMA_VERSION,
     INSTRUMENT_METADATA_SOURCE,
@@ -101,6 +118,27 @@ from ingestion.recent_trades import (
     utc_run_id as recent_trade_utc_run_id,
 )
 from ingestion.recent_trades_lake import save_recent_trade_snapshot_parquet_lake
+from ingestion.volatility_index import (
+    VOLATILITY_INDEX_DATASET_TYPE,
+    VOLATILITY_INDEX_SCHEMA_VERSION,
+    VOLATILITY_INDEX_SOURCE,
+    VolatilityIndexSnapshotRow,
+    normalize_volatility_index_candles,
+)
+from ingestion.volatility_index import (
+    overlap_start_timestamp_ms as volatility_index_overlap_start_timestamp_ms,
+)
+from ingestion.volatility_index import (
+    snapshot_time_floor_minute as volatility_index_snapshot_time_floor_minute,
+)
+from ingestion.volatility_index import (
+    snapshot_timestamp_ms as volatility_index_snapshot_timestamp_ms,
+)
+from ingestion.volatility_index import (
+    utc_run_id as volatility_index_utc_run_id,
+)
+from ingestion.volatility_index_lake import save_volatility_index_snapshot_parquet_lake
+from sources.deribit_futures import fetch_futures_book_summary_rows
 from sources.deribit_index_price import fetch_index_price
 from sources.deribit_instruments import fetch_instruments
 from sources.deribit_option_ticker import fetch_option_ticker
@@ -113,6 +151,7 @@ from sources.deribit_trades import (
     fetch_last_trades_by_currency,
     resolve_trades_currency_request,
 )
+from sources.deribit_volatility_index import fetch_volatility_index_candles
 from sources.registry import source_adapter_for_exchange
 
 __all__ = ["build_parser", "main"]
@@ -123,6 +162,8 @@ OptionInstrumentTickerRowsByInstrument = dict[str, OptionInstrumentTickerSnapsho
 InstrumentMetadataRowsByDate = dict[str, list[InstrumentMetadataSnapshotRow]]
 IndexPriceRowsBySymbol = dict[str, list[IndexPriceSnapshotRow]]
 RecentTradeRowsByScope = dict[str, list[RecentTradeSnapshotRow]]
+FuturesSummaryRowsByCurrency = dict[str, list[FuturesSummarySnapshotRow]]
+VolatilityIndexRowsByCurrency = dict[str, list[VolatilityIndexSnapshotRow]]
 CommandHandler: TypeAlias = Callable[[argparse.Namespace, logging.Logger, Config], None]
 
 
@@ -273,6 +314,54 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
     )
     _debug_flag(options_parser)
 
+    futures_summary_config = config_section(ingestion_config, "futures_summary")
+    futures_summary_parser = subparsers.add_parser(
+        FUTURES_SUMMARY_BRONZE_BUILDER_COMMAND,
+        help="Fetch Deribit futures summary snapshots and persist raw rows to the bronze parquet lake",
+    )
+    futures_summary_parser.add_argument(
+        "--exchange",
+        choices=["deribit"],
+        default="deribit",
+    )
+    futures_summary_parser.add_argument(
+        "--symbols",
+        "--currencies",
+        dest="currencies",
+        nargs="+",
+        default=config_str_list(futures_summary_config, "currencies", ["BTC", "ETH", "SOL"]),
+        type=str,
+        help="Futures symbols/currencies to fetch, separated by spaces or commas",
+    )
+    futures_summary_parser.add_argument(
+        "--lake-root",
+        default=config_str(futures_summary_config, "lake_root", "lake/bronze"),
+        help="Root directory for parquet lake files",
+    )
+    _boolean_optional_flag(
+        futures_summary_parser,
+        "save-parquet-lake",
+        config_bool(futures_summary_config, "save_parquet_lake", True),
+        "Save raw futures summary rows to bronze parquet lake partitions",
+    )
+    futures_summary_parser.add_argument(
+        "--source",
+        default=config_str(futures_summary_config, "source", FUTURES_SUMMARY_SOURCE),
+        help="Source identifier written to bronze rows",
+    )
+    futures_summary_parser.add_argument(
+        "--schema-version",
+        default=config_str(futures_summary_config, "schema_version", FUTURES_SUMMARY_SCHEMA_VERSION),
+        help="Schema version tag to annotate each normalized row",
+    )
+    _boolean_optional_flag(
+        futures_summary_parser,
+        "json-output",
+        config_bool(futures_summary_config, "json_output", config_bool(ingestion_config, "json_output", True)),
+        "Print JSON output",
+    )
+    _debug_flag(futures_summary_parser)
+
     option_instrument_ticker_config = config_section(ingestion_config, "option_instrument_ticker")
     option_instrument_ticker_parser = subparsers.add_parser(
         OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
@@ -307,7 +396,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
     option_instrument_ticker_parser.add_argument(
         "--max-instruments-per-run",
         type=int,
-        default=config_int(option_instrument_ticker_config, "max_instruments_per_run", 20),
+        default=config_int(option_instrument_ticker_config, "max_instruments_per_run", 60),
         help="Maximum selected option instruments to fetch sequentially per currency",
     )
     _boolean_optional_flag(
@@ -432,6 +521,61 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         "Print JSON output",
     )
     _debug_flag(index_price_parser)
+
+    volatility_index_config = config_section(ingestion_config, "volatility_index")
+    volatility_index_parser = subparsers.add_parser(
+        VOLATILITY_INDEX_BRONZE_BUILDER_COMMAND,
+        help="Fetch Deribit volatility-index candles and persist raw rows to the bronze parquet lake",
+    )
+    volatility_index_parser.add_argument(
+        "--symbols",
+        "--currencies",
+        dest="currencies",
+        nargs="+",
+        default=config_str_list(volatility_index_config, "currencies", ["BTC", "ETH", "SOL"]),
+        type=str,
+        help="Volatility-index currencies to fetch, separated by spaces or commas",
+    )
+    volatility_index_parser.add_argument(
+        "--resolution",
+        type=int,
+        default=config_int(volatility_index_config, "resolution", 60),
+        help="Deribit volatility-index candle resolution",
+    )
+    volatility_index_parser.add_argument(
+        "--lookback-seconds",
+        type=int,
+        default=config_int(volatility_index_config, "lookback_seconds", 600),
+        help="Overlap window start in seconds before the run snapshot minute",
+    )
+    volatility_index_parser.add_argument(
+        "--lake-root",
+        default=config_str(volatility_index_config, "lake_root", "lake/bronze"),
+        help="Root directory for parquet lake files",
+    )
+    _boolean_optional_flag(
+        volatility_index_parser,
+        "save-parquet-lake",
+        config_bool(volatility_index_config, "save_parquet_lake", True),
+        "Save volatility-index candles to bronze parquet lake partitions",
+    )
+    volatility_index_parser.add_argument(
+        "--source",
+        default=config_str(volatility_index_config, "source", VOLATILITY_INDEX_SOURCE),
+        help="Source identifier written to bronze rows",
+    )
+    volatility_index_parser.add_argument(
+        "--schema-version",
+        default=config_str(volatility_index_config, "schema_version", VOLATILITY_INDEX_SCHEMA_VERSION),
+        help="Schema version tag to annotate each normalized row",
+    )
+    _boolean_optional_flag(
+        volatility_index_parser,
+        "json-output",
+        config_bool(volatility_index_config, "json_output", config_bool(ingestion_config, "json_output", True)),
+        "Print JSON output",
+    )
+    _debug_flag(volatility_index_parser)
 
     recent_trades_config = config_section(ingestion_config, "recent_trades")
     recent_trades_parser = subparsers.add_parser(
@@ -987,6 +1131,82 @@ def _run_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger
     )
 
 
+def _run_futures_summary_bronze_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """Run Deribit futures summary snapshot collection and optional Bronze persistence."""
+
+    started_at = perf_counter()
+    currencies = _normalize_cli_currencies(cast(list[str], args.currencies))
+    run_id = futures_summary_utc_run_id()
+    snapshot_time = futures_summary_snapshot_time_floor_minute()
+    ingested_at = datetime.now(UTC)
+
+    rows_by_currency: FuturesSummaryRowsByCurrency = {}
+    errors: list[str] = []
+    source_currency_by_requested: dict[str, str] = {}
+    for currency in currencies:
+        try:
+            raw_rows, source_currency = fetch_futures_book_summary_rows(currency)
+            source_currency_by_requested[currency] = source_currency
+            rows, row_errors = normalize_futures_summary_rows(
+                raw_rows,
+                requested_currency=currency,
+                source_currency=source_currency,
+                run_id=run_id,
+                snapshot_time=snapshot_time,
+                ingested_at=ingested_at,
+                source=cast(str, args.source),
+                schema_version=cast(str, args.schema_version),
+            )
+            rows_by_currency[currency] = rows
+            errors.extend(row_errors)
+        except Exception as exc:  # noqa: BLE001
+            rows_by_currency[currency] = []
+            errors.append(f"{currency}: {exc}")
+
+    all_rows = [row for rows in rows_by_currency.values() for row in rows]
+    output_files: list[str] = []
+    if bool(args.save_parquet_lake):
+        output_files = save_futures_summary_snapshot_parquet_lake(
+            rows=all_rows,
+            lake_root=cast(str, args.lake_root),
+        )
+
+    currency_results = {
+        currency: {
+            "rows": len(rows_by_currency.get(currency, [])),
+            "source_currency": source_currency_by_requested.get(currency, ""),
+        }
+        for currency in currencies
+    }
+    output = {
+        "command": FUTURES_SUMMARY_BRONZE_BUILDER_COMMAND,
+        "exchange": cast(str, args.exchange),
+        "dataset_type": FUTURES_SUMMARY_DATASET_TYPE,
+        "run_id": run_id,
+        "snapshot_time": snapshot_time.isoformat().replace("+00:00", "Z"),
+        "requested_currencies": currencies,
+        "currency_results": currency_results,
+        "rows_written": len(all_rows),
+        "output_files": output_files,
+        "errors": errors,
+    }
+    _emit_json_output(bool(args.json_output), output)
+    _log_job_event(
+        logger,
+        logging.INFO,
+        FUTURES_SUMMARY_BRONZE_BUILDER_COMMAND,
+        "run_summary",
+        currencies=currencies,
+        elapsed_s=perf_counter() - started_at,
+        errors=len(errors),
+        files=len(output_files),
+        rows_written=len(all_rows),
+        run_id=run_id,
+        snapshot_time=output["snapshot_time"],
+        status="complete" if not errors else "partial",
+    )
+
+
 def _select_option_ticker_prediction_universe_by_currency(
     currencies: list[str],
     explicit_instruments: list[str],
@@ -1155,7 +1375,9 @@ def _run_instrument_metadata_bronze_builder(args: argparse.Namespace, logger: lo
     output = {
         "command": INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
         "exchange": "deribit",
-        "dataset_type": INSTRUMENT_METADATA_DATASET_TYPE,
+        "dataset_type": (
+            FUTURE_INSTRUMENT_METADATA_DATASET_TYPE if kind == "future" else INSTRUMENT_METADATA_DATASET_TYPE
+        ),
         "run_id": run_id,
         "snapshot_date": snapshot_date.isoformat(),
         "requested_currencies": currencies,
@@ -1244,6 +1466,100 @@ def _run_index_price_bronze_builder(args: argparse.Namespace, logger: logging.Lo
         snapshot_time=output["snapshot_time"],
         status="complete" if not errors else "partial",
         symbols=symbols,
+    )
+
+
+def _run_volatility_index_bronze_builder(args: argparse.Namespace, logger: logging.Logger) -> None:
+    """Run Deribit volatility-index candle collection and optional Bronze persistence."""
+
+    started_at = perf_counter()
+    currencies = _normalize_cli_currencies(cast(list[str], args.currencies))
+    resolution = int(args.resolution)
+    if resolution <= 0:
+        raise ValueError("resolution must be positive")
+    run_id = volatility_index_utc_run_id()
+    snapshot_time = volatility_index_snapshot_time_floor_minute()
+    ingested_at = datetime.now(UTC)
+    start_timestamp = volatility_index_overlap_start_timestamp_ms(
+        snapshot_time=snapshot_time,
+        lookback_seconds=int(args.lookback_seconds),
+    )
+    end_timestamp = volatility_index_snapshot_timestamp_ms(snapshot_time)
+
+    rows_by_currency: VolatilityIndexRowsByCurrency = {}
+    source_currency_by_requested: dict[str, str] = {}
+    errors: list[str] = []
+    for currency in currencies:
+        try:
+            candles, source_currency = fetch_volatility_index_candles(
+                currency,
+                start_timestamp=start_timestamp,
+                end_timestamp=end_timestamp,
+                resolution=resolution,
+            )
+            source_currency_by_requested[currency] = source_currency
+            rows, row_errors = normalize_volatility_index_candles(
+                candles,
+                currency=currency,
+                source_currency=source_currency,
+                resolution=resolution,
+                run_id=run_id,
+                snapshot_time=snapshot_time,
+                ingested_at=ingested_at,
+                source=cast(str, args.source),
+                schema_version=cast(str, args.schema_version),
+            )
+            rows_by_currency[currency] = rows
+            errors.extend(row_errors)
+        except Exception as exc:  # noqa: BLE001
+            rows_by_currency[currency] = []
+            errors.append(f"{currency}: {exc}")
+
+    all_rows = [row for rows in rows_by_currency.values() for row in rows]
+    output_files: list[str] = []
+    if bool(args.save_parquet_lake):
+        output_files = save_volatility_index_snapshot_parquet_lake(
+            rows=all_rows,
+            lake_root=cast(str, args.lake_root),
+        )
+
+    currency_results = {
+        currency: {
+            "rows": len(rows_by_currency.get(currency, [])),
+            "source_currency": source_currency_by_requested.get(currency, ""),
+        }
+        for currency in currencies
+    }
+    output = {
+        "command": VOLATILITY_INDEX_BRONZE_BUILDER_COMMAND,
+        "exchange": "deribit",
+        "dataset_type": VOLATILITY_INDEX_DATASET_TYPE,
+        "run_id": run_id,
+        "snapshot_time": snapshot_time.isoformat().replace("+00:00", "Z"),
+        "requested_currencies": currencies,
+        "resolution": resolution,
+        "start_timestamp": start_timestamp,
+        "end_timestamp": end_timestamp,
+        "currency_results": currency_results,
+        "rows_written": len(all_rows),
+        "output_files": output_files,
+        "errors": errors,
+    }
+    _emit_json_output(bool(args.json_output), output)
+    _log_job_event(
+        logger,
+        logging.INFO,
+        VOLATILITY_INDEX_BRONZE_BUILDER_COMMAND,
+        "run_summary",
+        currencies=currencies,
+        elapsed_s=perf_counter() - started_at,
+        errors=len(errors),
+        files=len(output_files),
+        resolution=resolution,
+        rows_written=len(all_rows),
+        run_id=run_id,
+        snapshot_time=output["snapshot_time"],
+        status="complete" if not errors else "partial",
     )
 
 
@@ -1425,6 +1741,11 @@ def _handle_options_bronze_builder(args: argparse.Namespace, logger: logging.Log
     _run_options_bronze_builder(args=args, logger=logger, config=config)
 
 
+def _handle_futures_summary_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    _ = config
+    _run_futures_summary_bronze_builder(args=args, logger=logger)
+
+
 def _handle_option_instrument_ticker_bronze_builder(
     args: argparse.Namespace,
     logger: logging.Logger,
@@ -1446,6 +1767,11 @@ def _handle_index_price_bronze_builder(args: argparse.Namespace, logger: logging
     _run_index_price_bronze_builder(args=args, logger=logger)
 
 
+def _handle_volatility_index_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
+    _ = config
+    _run_volatility_index_bronze_builder(args=args, logger=logger)
+
+
 def _handle_recent_trades_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config: Config) -> None:
     _ = config
     _run_recent_trades_bronze_builder(args=args, logger=logger)
@@ -1462,9 +1788,11 @@ def command_handlers() -> dict[str, CommandHandler]:
     return {
         BRONZE_BUILDER_COMMAND: _handle_bronze_builder,
         OPTIONS_BRONZE_BUILDER_COMMAND: _handle_options_bronze_builder,
+        FUTURES_SUMMARY_BRONZE_BUILDER_COMMAND: _handle_futures_summary_bronze_builder,
         OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND: _handle_option_instrument_ticker_bronze_builder,
         INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND: _handle_instrument_metadata_bronze_builder,
         INDEX_PRICE_BRONZE_BUILDER_COMMAND: _handle_index_price_bronze_builder,
+        VOLATILITY_INDEX_BRONZE_BUILDER_COMMAND: _handle_volatility_index_bronze_builder,
         RECENT_TRADES_BRONZE_BUILDER_COMMAND: _handle_recent_trades_bronze_builder,
         VALIDATE_SYMBOLS_COMMAND: _handle_validate_symbols,
     }
