@@ -736,10 +736,16 @@ Upsert-based datasets merge by natural keys and deterministic sort order:
 - Every CLI command accepts `--debug`.
 - Log files are module-scoped under the configured `.logs` directory.
 - Runtime logs use one formatter: `timestamp level module_scope logger message`.
-- Job lifecycle messages use a stable key-value envelope:
+- Dataset lifecycle messages use a stable key-value envelope with `dataset_type` and `exchange`
+  on every dataset event:
   - `job_event command=<command> event=dispatch ...`
-  - `job_event command=<command> event=debug_config ...`
+  - `job_event command=<command> event=run_start dataset_type=<dataset> exchange=<exchange> ...`
+  - `job_event command=<command> event=fetch_complete dataset_type=<dataset> exchange=<exchange> ...`
+  - `job_event command=<command> event=normalization_complete dataset_type=<dataset> exchange=<exchange> ...`
+  - `job_event command=<command> event=persistence_complete dataset_type=<dataset> exchange=<exchange> ...`
   - `job_event command=<command> event=run_summary ...`
+- `--debug` emits request scope, source mappings, raw row counts, normalized row counts, persistence
+  paths, and collector-specific timing or window parameters where applicable.
 - Log rotation is controlled by `runtime.log_rotation_days` and `runtime.log_backup_count`.
 
 ## 8.3 Data Quality

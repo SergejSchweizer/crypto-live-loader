@@ -788,6 +788,53 @@ def _log_job_event(
     logger.log(level, "job_event command=%s event=%s %s", command, event, _format_log_fields(fields))
 
 
+def _log_dataset_event(
+    logger: logging.Logger,
+    level: int,
+    command: str,
+    event: str,
+    *,
+    dataset_type: str,
+    exchange: str = "deribit",
+    **fields: object,
+) -> None:
+    """Write one dataset-scoped lifecycle event with the shared log envelope."""
+
+    _log_job_event(
+        logger,
+        level,
+        command,
+        event,
+        dataset_type=dataset_type,
+        exchange=exchange,
+        **fields,
+    )
+
+
+def _log_dataset_debug_event(
+    logger: logging.Logger,
+    command: str,
+    event: str,
+    *,
+    dataset_type: str,
+    exchange: str = "deribit",
+    **fields: object,
+) -> None:
+    """Write an expressive dataset debug event only when DEBUG logging is enabled."""
+
+    if not logger.isEnabledFor(logging.DEBUG):
+        return
+    _log_dataset_event(
+        logger,
+        logging.DEBUG,
+        command,
+        event,
+        dataset_type=dataset_type,
+        exchange=exchange,
+        **fields,
+    )
+
+
 def _fetch_options_rows_for_currencies(
     currencies: list[str],
 ) -> tuple[dict[str, list[dict[str, object]]], dict[str, str], dict[str, str]]:
@@ -869,11 +916,12 @@ def _log_bronze_builder_summary(
     status = "partial" if collected_total < requested_total else "complete"
     if parquet_error is not None:
         status = "parquet_error"
-    _log_job_event(
+    _log_dataset_event(
         logger,
         logging.INFO,
         BRONZE_BUILDER_COMMAND,
         "run_summary",
+        dataset_type="l2_snapshot",
         elapsed_s=elapsed_s,
         errors=1 if parquet_error is not None else 0,
         exchange=exchange,
@@ -908,11 +956,12 @@ def _build_snapshot_output(
             requested_snapshots=requested_snapshots,
         )
         exchange_output[symbol_key] = [_serialize_l2_snapshot(item) for item in snapshots]
-        _log_job_event(
+        _log_dataset_event(
             logger,
             logging.INFO,
             BRONZE_BUILDER_COMMAND,
             "snapshot_stats",
+            dataset_type="l2_snapshot",
             exchange=exchange,
             snapshots_collected=len(snapshots),
             snapshots_requested=requested_snapshots,
@@ -1004,6 +1053,20 @@ def _run_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config
     symbols = _normalize_cli_symbols(cast(list[str], args.symbols))
     requested_snapshots = int(args.snapshot_count)
     max_runtime_s = float(args.max_runtime_s)
+    _log_dataset_debug_event(
+        logger,
+        BRONZE_BUILDER_COMMAND,
+        "run_start",
+        dataset_type="l2_snapshot",
+        exchange=exchange,
+        depth=int(args.levels),
+        lake_root=cast(str, args.lake_root),
+        max_runtime_s=max_runtime_s,
+        poll_interval_s=float(args.poll_interval_s),
+        save_parquet_lake=bool(args.save_parquet_lake),
+        snapshot_count=requested_snapshots,
+        symbols=symbols,
+    )
     _warn_for_long_poll_schedule(
         logger=logger,
         snapshot_count=requested_snapshots,
@@ -1017,6 +1080,16 @@ def _run_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config
         snapshot_count=requested_snapshots,
         poll_interval_s=float(args.poll_interval_s),
         max_runtime_s=max_runtime_s if max_runtime_s > 0 else None,
+    )
+    _log_dataset_debug_event(
+        logger,
+        BRONZE_BUILDER_COMMAND,
+        "collection_complete",
+        dataset_type="l2_snapshot",
+        exchange=exchange,
+        snapshots_collected=sum(len(snapshots) for snapshots in snapshots_by_symbol.values()),
+        snapshots_by_symbol={symbol: len(snapshots_by_symbol.get(symbol, [])) for symbol in symbols},
+        snapshots_requested=requested_snapshots * len(symbols),
     )
 
     output = _build_snapshot_output(
@@ -1033,6 +1106,17 @@ def _run_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config
         enabled=bool(args.save_parquet_lake),
         output=output,
         logger=logger,
+    )
+    _log_dataset_debug_event(
+        logger,
+        BRONZE_BUILDER_COMMAND,
+        "persistence_complete",
+        dataset_type="l2_snapshot",
+        exchange=exchange,
+        files=len(parquet_files),
+        output_files=parquet_files,
+        parquet_error=parquet_error,
+        save_parquet_lake=bool(args.save_parquet_lake),
     )
 
     _emit_json_output(bool(args.json_output), output)
@@ -1056,9 +1140,32 @@ def _run_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger
     run_id = utc_run_id()
     snapshot_time = snapshot_time_floor_minute()
     ingested_at = datetime.now(UTC)
+    _log_dataset_debug_event(
+        logger,
+        OPTIONS_BRONZE_BUILDER_COMMAND,
+        "run_start",
+        dataset_type=OPTION_TICKER_DATASET_TYPE,
+        currencies=currencies,
+        lake_root=cast(str, args.lake_root),
+        run_id=run_id,
+        save_parquet_lake=bool(args.save_parquet_lake),
+        schema_version=cast(str, args.schema_version),
+        source=cast(str, args.source),
+        snapshot_time=snapshot_time.isoformat().replace("+00:00", "Z"),
+    )
 
     raw_rows_by_currency, source_currency_by_requested, fetch_errors = _fetch_options_rows_for_currencies(
         currencies=currencies
+    )
+    _log_dataset_debug_event(
+        logger,
+        OPTIONS_BRONZE_BUILDER_COMMAND,
+        "fetch_complete",
+        dataset_type=OPTION_TICKER_DATASET_TYPE,
+        currencies=currencies,
+        errors=len(fetch_errors),
+        raw_rows_by_currency={currency: len(raw_rows_by_currency.get(currency, [])) for currency in currencies},
+        source_currency_by_requested=source_currency_by_requested,
     )
 
     rows_by_currency: OptionRowsByCurrency = {}
@@ -1078,6 +1185,15 @@ def _run_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger
         )
         rows_by_currency[currency] = rows
         normalization_errors.extend(row_errors)
+    _log_dataset_debug_event(
+        logger,
+        OPTIONS_BRONZE_BUILDER_COMMAND,
+        "normalization_complete",
+        dataset_type=OPTION_TICKER_DATASET_TYPE,
+        normalized_rows=sum(len(rows) for rows in rows_by_currency.values()),
+        normalization_errors=len(normalization_errors),
+        rows_by_currency={currency: len(rows_by_currency.get(currency, [])) for currency in currencies},
+    )
 
     output_files: list[str] = []
     if bool(args.save_parquet_lake):
@@ -1085,6 +1201,15 @@ def _run_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger
             rows_by_currency=rows_by_currency,
             lake_root=cast(str, args.lake_root),
         )
+    _log_dataset_debug_event(
+        logger,
+        OPTIONS_BRONZE_BUILDER_COMMAND,
+        "persistence_complete",
+        dataset_type=OPTION_TICKER_DATASET_TYPE,
+        files=len(output_files),
+        output_files=output_files,
+        save_parquet_lake=bool(args.save_parquet_lake),
+    )
 
     currency_results: dict[str, dict[str, object]] = {}
     for currency in currencies:
@@ -1115,11 +1240,12 @@ def _run_options_bronze_builder(args: argparse.Namespace, logger: logging.Logger
         "errors": errors,
     }
     _emit_json_output(bool(args.json_output), output)
-    _log_job_event(
+    _log_dataset_event(
         logger,
         logging.INFO,
         OPTIONS_BRONZE_BUILDER_COMMAND,
         "run_summary",
+        dataset_type=OPTION_TICKER_DATASET_TYPE,
         currencies=currencies,
         elapsed_s=perf_counter() - started_at,
         errors=len(errors),
@@ -1139,13 +1265,28 @@ def _run_futures_summary_bronze_builder(args: argparse.Namespace, logger: loggin
     run_id = futures_summary_utc_run_id()
     snapshot_time = futures_summary_snapshot_time_floor_minute()
     ingested_at = datetime.now(UTC)
+    _log_dataset_debug_event(
+        logger,
+        FUTURES_SUMMARY_BRONZE_BUILDER_COMMAND,
+        "run_start",
+        dataset_type=FUTURES_SUMMARY_DATASET_TYPE,
+        currencies=currencies,
+        lake_root=cast(str, args.lake_root),
+        run_id=run_id,
+        save_parquet_lake=bool(args.save_parquet_lake),
+        schema_version=cast(str, args.schema_version),
+        source=cast(str, args.source),
+        snapshot_time=snapshot_time.isoformat().replace("+00:00", "Z"),
+    )
 
     rows_by_currency: FuturesSummaryRowsByCurrency = {}
     errors: list[str] = []
     source_currency_by_requested: dict[str, str] = {}
+    raw_rows_by_currency: dict[str, int] = {}
     for currency in currencies:
         try:
             raw_rows, source_currency = fetch_futures_book_summary_rows(currency)
+            raw_rows_by_currency[currency] = len(raw_rows)
             source_currency_by_requested[currency] = source_currency
             rows, row_errors = normalize_futures_summary_rows(
                 raw_rows,
@@ -1161,7 +1302,19 @@ def _run_futures_summary_bronze_builder(args: argparse.Namespace, logger: loggin
             errors.extend(row_errors)
         except Exception as exc:  # noqa: BLE001
             rows_by_currency[currency] = []
+            raw_rows_by_currency[currency] = 0
             errors.append(f"{currency}: {exc}")
+    _log_dataset_debug_event(
+        logger,
+        FUTURES_SUMMARY_BRONZE_BUILDER_COMMAND,
+        "collection_complete",
+        dataset_type=FUTURES_SUMMARY_DATASET_TYPE,
+        errors=len(errors),
+        normalized_rows=sum(len(rows) for rows in rows_by_currency.values()),
+        raw_rows_by_currency=raw_rows_by_currency,
+        rows_by_currency={currency: len(rows_by_currency.get(currency, [])) for currency in currencies},
+        source_currency_by_requested=source_currency_by_requested,
+    )
 
     all_rows = [row for rows in rows_by_currency.values() for row in rows]
     output_files: list[str] = []
@@ -1170,6 +1323,15 @@ def _run_futures_summary_bronze_builder(args: argparse.Namespace, logger: loggin
             rows=all_rows,
             lake_root=cast(str, args.lake_root),
         )
+    _log_dataset_debug_event(
+        logger,
+        FUTURES_SUMMARY_BRONZE_BUILDER_COMMAND,
+        "persistence_complete",
+        dataset_type=FUTURES_SUMMARY_DATASET_TYPE,
+        files=len(output_files),
+        output_files=output_files,
+        save_parquet_lake=bool(args.save_parquet_lake),
+    )
 
     currency_results = {
         currency: {
@@ -1191,11 +1353,12 @@ def _run_futures_summary_bronze_builder(args: argparse.Namespace, logger: loggin
         "errors": errors,
     }
     _emit_json_output(bool(args.json_output), output)
-    _log_job_event(
+    _log_dataset_event(
         logger,
         logging.INFO,
         FUTURES_SUMMARY_BRONZE_BUILDER_COMMAND,
         "run_summary",
+        dataset_type=FUTURES_SUMMARY_DATASET_TYPE,
         currencies=currencies,
         elapsed_s=perf_counter() - started_at,
         errors=len(errors),
@@ -1262,6 +1425,19 @@ def _run_option_instrument_ticker_bronze_builder(
     currencies = _normalize_cli_currencies(cast(list[str], args.currencies))
     explicit_instruments = _normalize_cli_instruments(cast(list[str], args.instruments))
     max_instruments_per_currency = max(1, int(args.max_instruments_per_run))
+    _log_dataset_debug_event(
+        logger,
+        OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
+        "run_start",
+        dataset_type=OPTION_INSTRUMENT_TICKER_DATASET_TYPE,
+        currencies=currencies,
+        explicit_instruments=len(explicit_instruments),
+        lake_root=cast(str, args.lake_root),
+        max_instruments_per_currency=max_instruments_per_currency,
+        save_parquet_lake=bool(args.save_parquet_lake),
+        schema_version=cast(str, args.schema_version),
+        source=cast(str, args.source),
+    )
     instruments_by_currency, discovery_errors = _select_option_ticker_prediction_universe_by_currency(
         currencies=currencies,
         explicit_instruments=explicit_instruments,
@@ -1275,8 +1451,31 @@ def _run_option_instrument_ticker_bronze_builder(
         explicit_instruments=explicit_instruments,
         max_instruments_per_run=max_instruments_per_currency,
     )
+    _log_dataset_debug_event(
+        logger,
+        OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
+        "universe_selected",
+        dataset_type=OPTION_INSTRUMENT_TICKER_DATASET_TYPE,
+        discovery_errors=len(discovery_errors),
+        instruments_by_currency={
+            currency: len(currency_instruments)
+            for currency, currency_instruments in sorted(instruments_by_currency.items())
+        },
+        instruments_requested=len(instruments),
+        run_id=run_id,
+        snapshot_time=snapshot_time.isoformat().replace("+00:00", "Z"),
+    )
 
     raw_rows_by_instrument, fetch_errors = _fetch_option_ticker_rows_for_instruments(instruments=instruments)
+    _log_dataset_debug_event(
+        logger,
+        OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
+        "fetch_complete",
+        dataset_type=OPTION_INSTRUMENT_TICKER_DATASET_TYPE,
+        fetch_errors=len(fetch_errors),
+        instruments_requested=len(instruments),
+        raw_rows=len(raw_rows_by_instrument),
+    )
     rows, normalization_errors = normalize_option_instrument_ticker_rows(
         raw_rows_by_instrument,
         run_id=run_id,
@@ -1285,6 +1484,14 @@ def _run_option_instrument_ticker_bronze_builder(
         source=cast(str, args.source),
         schema_version=cast(str, args.schema_version),
     )
+    _log_dataset_debug_event(
+        logger,
+        OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
+        "normalization_complete",
+        dataset_type=OPTION_INSTRUMENT_TICKER_DATASET_TYPE,
+        normalization_errors=len(normalization_errors),
+        rows_written=len(rows),
+    )
 
     output_files: list[str] = []
     if bool(args.save_parquet_lake):
@@ -1292,6 +1499,15 @@ def _run_option_instrument_ticker_bronze_builder(
             rows=rows,
             lake_root=cast(str, args.lake_root),
         )
+    _log_dataset_debug_event(
+        logger,
+        OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
+        "persistence_complete",
+        dataset_type=OPTION_INSTRUMENT_TICKER_DATASET_TYPE,
+        files=len(output_files),
+        output_files=output_files,
+        save_parquet_lake=bool(args.save_parquet_lake),
+    )
 
     errors = discovery_errors + list(fetch_errors.values()) + normalization_errors
     instruments_discovered = sum(len(currency_instruments) for currency_instruments in instruments_by_currency.values())
@@ -1319,11 +1535,12 @@ def _run_option_instrument_ticker_bronze_builder(
         "errors": errors,
     }
     _emit_json_output(bool(args.json_output), output)
-    _log_job_event(
+    _log_dataset_event(
         logger,
         logging.INFO,
         OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
         "run_summary",
+        dataset_type=OPTION_INSTRUMENT_TICKER_DATASET_TYPE,
         currencies=currencies,
         elapsed_s=perf_counter() - started_at,
         errors=len(errors),
@@ -1347,14 +1564,43 @@ def _run_instrument_metadata_bronze_builder(args: argparse.Namespace, logger: lo
     run_id = instrument_utc_run_id()
     ingested_at = datetime.now(UTC)
     snapshot_date = snapshot_date_utc()
+    dataset_type = FUTURE_INSTRUMENT_METADATA_DATASET_TYPE if kind == "future" else INSTRUMENT_METADATA_DATASET_TYPE
+    _log_dataset_debug_event(
+        logger,
+        INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
+        "run_start",
+        dataset_type=dataset_type,
+        currencies=currencies,
+        include_inactive=include_inactive,
+        kind=kind,
+        lake_root=cast(str, args.lake_root),
+        run_id=run_id,
+        save_parquet_lake=bool(args.save_parquet_lake),
+        schema_version=cast(str, args.schema_version),
+        source=cast(str, args.source),
+        snapshot_date=snapshot_date.isoformat(),
+    )
 
     raw_rows: list[dict[str, object]] = []
     fetch_errors: list[str] = []
+    raw_rows_by_currency: dict[str, int] = {}
     for currency in currencies:
         try:
-            raw_rows.extend(fetch_instruments(currency=currency, kind=kind, expired=include_inactive))
+            currency_rows = fetch_instruments(currency=currency, kind=kind, expired=include_inactive)
+            raw_rows_by_currency[currency] = len(currency_rows)
+            raw_rows.extend(currency_rows)
         except Exception as exc:  # noqa: BLE001
+            raw_rows_by_currency[currency] = 0
             fetch_errors.append(f"{currency}: {exc}")
+    _log_dataset_debug_event(
+        logger,
+        INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
+        "fetch_complete",
+        dataset_type=dataset_type,
+        errors=len(fetch_errors),
+        raw_rows=len(raw_rows),
+        raw_rows_by_currency=raw_rows_by_currency,
+    )
 
     rows, normalize_errors = normalize_instrument_metadata_rows(
         raw_rows,
@@ -1364,6 +1610,14 @@ def _run_instrument_metadata_bronze_builder(args: argparse.Namespace, logger: lo
         source=cast(str, args.source),
         schema_version=cast(str, args.schema_version),
     )
+    _log_dataset_debug_event(
+        logger,
+        INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
+        "normalization_complete",
+        dataset_type=dataset_type,
+        normalization_errors=len(normalize_errors),
+        rows_written=len(rows),
+    )
     rows_by_date: InstrumentMetadataRowsByDate = {snapshot_date.isoformat(): rows}
     output_files: list[str] = []
     if bool(args.save_parquet_lake):
@@ -1371,13 +1625,20 @@ def _run_instrument_metadata_bronze_builder(args: argparse.Namespace, logger: lo
             rows_by_date=rows_by_date,
             lake_root=cast(str, args.lake_root),
         )
+    _log_dataset_debug_event(
+        logger,
+        INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
+        "persistence_complete",
+        dataset_type=dataset_type,
+        files=len(output_files),
+        output_files=output_files,
+        save_parquet_lake=bool(args.save_parquet_lake),
+    )
 
     output = {
         "command": INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
         "exchange": "deribit",
-        "dataset_type": (
-            FUTURE_INSTRUMENT_METADATA_DATASET_TYPE if kind == "future" else INSTRUMENT_METADATA_DATASET_TYPE
-        ),
+        "dataset_type": dataset_type,
         "run_id": run_id,
         "snapshot_date": snapshot_date.isoformat(),
         "requested_currencies": currencies,
@@ -1389,11 +1650,12 @@ def _run_instrument_metadata_bronze_builder(args: argparse.Namespace, logger: lo
     }
     _emit_json_output(bool(args.json_output), output)
     error_count = len(fetch_errors) + len(normalize_errors)
-    _log_job_event(
+    _log_dataset_event(
         logger,
         logging.INFO,
         INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
         "run_summary",
+        dataset_type=dataset_type,
         currencies=currencies,
         elapsed_s=perf_counter() - started_at,
         errors=error_count,
@@ -1414,6 +1676,19 @@ def _run_index_price_bronze_builder(args: argparse.Namespace, logger: logging.Lo
     run_id = index_utc_run_id()
     ingested_at = datetime.now(UTC)
     snapshot_time = index_snapshot_time_floor_minute()
+    _log_dataset_debug_event(
+        logger,
+        INDEX_PRICE_BRONZE_BUILDER_COMMAND,
+        "run_start",
+        dataset_type=INDEX_PRICE_DATASET_TYPE,
+        lake_root=cast(str, args.lake_root),
+        run_id=run_id,
+        save_parquet_lake=bool(args.save_parquet_lake),
+        schema_version=cast(str, args.schema_version),
+        source=cast(str, args.source),
+        snapshot_time=snapshot_time.isoformat().replace("+00:00", "Z"),
+        symbols=symbols,
+    )
 
     rows_by_symbol: IndexPriceRowsBySymbol = {}
     errors: list[str] = []
@@ -1433,6 +1708,15 @@ def _run_index_price_bronze_builder(args: argparse.Namespace, logger: logging.Lo
         except Exception as exc:  # noqa: BLE001
             rows_by_symbol[symbol] = []
             errors.append(f"{symbol}: {exc}")
+    _log_dataset_debug_event(
+        logger,
+        INDEX_PRICE_BRONZE_BUILDER_COMMAND,
+        "collection_complete",
+        dataset_type=INDEX_PRICE_DATASET_TYPE,
+        errors=len(errors),
+        rows_by_symbol={symbol: len(rows_by_symbol.get(symbol, [])) for symbol in symbols},
+        rows_written=sum(len(rows) for rows in rows_by_symbol.values()),
+    )
 
     output_files: list[str] = []
     if bool(args.save_parquet_lake):
@@ -1440,6 +1724,15 @@ def _run_index_price_bronze_builder(args: argparse.Namespace, logger: logging.Lo
             rows_by_index=rows_by_symbol,
             lake_root=cast(str, args.lake_root),
         )
+    _log_dataset_debug_event(
+        logger,
+        INDEX_PRICE_BRONZE_BUILDER_COMMAND,
+        "persistence_complete",
+        dataset_type=INDEX_PRICE_DATASET_TYPE,
+        files=len(output_files),
+        output_files=output_files,
+        save_parquet_lake=bool(args.save_parquet_lake),
+    )
 
     output = {
         "command": INDEX_PRICE_BRONZE_BUILDER_COMMAND,
@@ -1453,11 +1746,12 @@ def _run_index_price_bronze_builder(args: argparse.Namespace, logger: logging.Lo
         "errors": errors,
     }
     _emit_json_output(bool(args.json_output), output)
-    _log_job_event(
+    _log_dataset_event(
         logger,
         logging.INFO,
         INDEX_PRICE_BRONZE_BUILDER_COMMAND,
         "run_summary",
+        dataset_type=INDEX_PRICE_DATASET_TYPE,
         elapsed_s=perf_counter() - started_at,
         errors=len(errors),
         files=len(output_files),
@@ -1485,10 +1779,28 @@ def _run_volatility_index_bronze_builder(args: argparse.Namespace, logger: loggi
         lookback_seconds=int(args.lookback_seconds),
     )
     end_timestamp = volatility_index_snapshot_timestamp_ms(snapshot_time)
+    _log_dataset_debug_event(
+        logger,
+        VOLATILITY_INDEX_BRONZE_BUILDER_COMMAND,
+        "run_start",
+        dataset_type=VOLATILITY_INDEX_DATASET_TYPE,
+        currencies=currencies,
+        end_timestamp=end_timestamp,
+        lake_root=cast(str, args.lake_root),
+        lookback_seconds=int(args.lookback_seconds),
+        resolution=resolution,
+        run_id=run_id,
+        save_parquet_lake=bool(args.save_parquet_lake),
+        schema_version=cast(str, args.schema_version),
+        source=cast(str, args.source),
+        snapshot_time=snapshot_time.isoformat().replace("+00:00", "Z"),
+        start_timestamp=start_timestamp,
+    )
 
     rows_by_currency: VolatilityIndexRowsByCurrency = {}
     source_currency_by_requested: dict[str, str] = {}
     errors: list[str] = []
+    candles_by_currency: dict[str, int] = {}
     for currency in currencies:
         try:
             candles, source_currency = fetch_volatility_index_candles(
@@ -1497,6 +1809,7 @@ def _run_volatility_index_bronze_builder(args: argparse.Namespace, logger: loggi
                 end_timestamp=end_timestamp,
                 resolution=resolution,
             )
+            candles_by_currency[currency] = len(candles)
             source_currency_by_requested[currency] = source_currency
             rows, row_errors = normalize_volatility_index_candles(
                 candles,
@@ -1513,7 +1826,18 @@ def _run_volatility_index_bronze_builder(args: argparse.Namespace, logger: loggi
             errors.extend(row_errors)
         except Exception as exc:  # noqa: BLE001
             rows_by_currency[currency] = []
+            candles_by_currency[currency] = 0
             errors.append(f"{currency}: {exc}")
+    _log_dataset_debug_event(
+        logger,
+        VOLATILITY_INDEX_BRONZE_BUILDER_COMMAND,
+        "collection_complete",
+        dataset_type=VOLATILITY_INDEX_DATASET_TYPE,
+        candles_by_currency=candles_by_currency,
+        errors=len(errors),
+        rows_by_currency={currency: len(rows_by_currency.get(currency, [])) for currency in currencies},
+        source_currency_by_requested=source_currency_by_requested,
+    )
 
     all_rows = [row for rows in rows_by_currency.values() for row in rows]
     output_files: list[str] = []
@@ -1522,6 +1846,15 @@ def _run_volatility_index_bronze_builder(args: argparse.Namespace, logger: loggi
             rows=all_rows,
             lake_root=cast(str, args.lake_root),
         )
+    _log_dataset_debug_event(
+        logger,
+        VOLATILITY_INDEX_BRONZE_BUILDER_COMMAND,
+        "persistence_complete",
+        dataset_type=VOLATILITY_INDEX_DATASET_TYPE,
+        files=len(output_files),
+        output_files=output_files,
+        save_parquet_lake=bool(args.save_parquet_lake),
+    )
 
     currency_results = {
         currency: {
@@ -1546,11 +1879,12 @@ def _run_volatility_index_bronze_builder(args: argparse.Namespace, logger: loggi
         "errors": errors,
     }
     _emit_json_output(bool(args.json_output), output)
-    _log_job_event(
+    _log_dataset_event(
         logger,
         logging.INFO,
         VOLATILITY_INDEX_BRONZE_BUILDER_COMMAND,
         "run_summary",
+        dataset_type=VOLATILITY_INDEX_DATASET_TYPE,
         currencies=currencies,
         elapsed_s=perf_counter() - started_at,
         errors=len(errors),
@@ -1581,13 +1915,49 @@ def _run_recent_trades_bronze_builder(args: argparse.Namespace, logger: logging.
             snapshot_time=snapshot_time,
             lookback_seconds=int(args.lookback_seconds),
         )
+    _log_dataset_debug_event(
+        logger,
+        RECENT_TRADES_BRONZE_BUILDER_COMMAND,
+        "run_start",
+        dataset_type=RECENT_TRADE_DATASET_TYPE,
+        count=count,
+        currencies=currencies,
+        kinds=kinds,
+        lake_root=cast(str, args.lake_root),
+        lookback_seconds=int(args.lookback_seconds),
+        run_id=run_id,
+        save_parquet_lake=bool(args.save_parquet_lake),
+        schema_version=cast(str, args.schema_version),
+        sorting=cast(str, args.sorting),
+        source=cast(str, args.source),
+        snapshot_time=snapshot_time.isoformat().replace("+00:00", "Z"),
+        start_timestamp=start_timestamp,
+    )
 
     requests = [resolve_trades_currency_request(currency, kind) for currency in currencies for kind in kinds]
+    _log_dataset_debug_event(
+        logger,
+        RECENT_TRADES_BRONZE_BUILDER_COMMAND,
+        "request_scopes_resolved",
+        dataset_type=RECENT_TRADE_DATASET_TYPE,
+        request_scopes=[
+            f"{request.requested_currency}:{request.source_currency}:{request.kind}" for request in requests
+        ],
+        requests=len(requests),
+    )
     raw_rows_by_scope, fetch_errors = _fetch_recent_trade_rows_for_requests(
         requests,
         count=count,
         start_timestamp=start_timestamp,
         sorting=cast(str, args.sorting),
+    )
+    _log_dataset_debug_event(
+        logger,
+        RECENT_TRADES_BRONZE_BUILDER_COMMAND,
+        "fetch_complete",
+        dataset_type=RECENT_TRADE_DATASET_TYPE,
+        errors=len(fetch_errors),
+        raw_rows_by_scope={scope: len(rows) for scope, rows in sorted(raw_rows_by_scope.items())},
     )
 
     rows_by_scope: RecentTradeRowsByScope = {}
@@ -1608,6 +1978,15 @@ def _run_recent_trades_bronze_builder(args: argparse.Namespace, logger: logging.
         )
         rows_by_scope[scope_key] = rows
         normalization_errors.extend(row_errors)
+    _log_dataset_debug_event(
+        logger,
+        RECENT_TRADES_BRONZE_BUILDER_COMMAND,
+        "normalization_complete",
+        dataset_type=RECENT_TRADE_DATASET_TYPE,
+        normalization_errors=len(normalization_errors),
+        rows_by_scope={scope: len(rows) for scope, rows in sorted(rows_by_scope.items())},
+        rows_written=sum(len(rows) for rows in rows_by_scope.values()),
+    )
 
     all_rows = [row for rows in rows_by_scope.values() for row in rows]
     output_files: list[str] = []
@@ -1616,6 +1995,15 @@ def _run_recent_trades_bronze_builder(args: argparse.Namespace, logger: logging.
             rows=all_rows,
             lake_root=cast(str, args.lake_root),
         )
+    _log_dataset_debug_event(
+        logger,
+        RECENT_TRADES_BRONZE_BUILDER_COMMAND,
+        "persistence_complete",
+        dataset_type=RECENT_TRADE_DATASET_TYPE,
+        files=len(output_files),
+        output_files=output_files,
+        save_parquet_lake=bool(args.save_parquet_lake),
+    )
 
     scope_results: dict[str, dict[str, object]] = {}
     for request in requests:
@@ -1651,11 +2039,12 @@ def _run_recent_trades_bronze_builder(args: argparse.Namespace, logger: logging.
         "errors": errors,
     }
     _emit_json_output(bool(args.json_output), output)
-    _log_job_event(
+    _log_dataset_event(
         logger,
         logging.INFO,
         RECENT_TRADES_BRONZE_BUILDER_COMMAND,
         "run_summary",
+        dataset_type=RECENT_TRADE_DATASET_TYPE,
         currencies=currencies,
         elapsed_s=perf_counter() - started_at,
         errors=len(errors),

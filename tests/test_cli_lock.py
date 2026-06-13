@@ -22,6 +22,7 @@ from api.constants import (
     VALIDATE_SYMBOLS_COMMAND,
     VOLATILITY_INDEX_BRONZE_BUILDER_COMMAND,
 )
+from api.logging_common import COMMAND_LOG_SCOPES, ModuleScopeFilter
 from api.runtime import configure_logging
 from domain.models import OrderLevel, RawSnapshot
 from ingestion.config import Config
@@ -170,6 +171,86 @@ def test_job_event_logs_use_uniform_key_value_shape(caplog: pytest.LogCaptureFix
     assert caplog.messages == [
         "job_event command=example-builder event=run_summary elapsed_s=1.235 files=2 status=complete symbols=BTC,ETH"
     ]
+
+
+def test_dataset_event_logs_include_dataset_envelope(caplog: pytest.LogCaptureFixture) -> None:
+    """Verify dataset logs consistently include exchange and dataset_type fields."""
+
+    logger = logging.getLogger("test_dataset_event_logs_include_dataset_envelope")
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        cli._log_dataset_event(
+            logger,
+            logging.INFO,
+            "example-builder",
+            "run_summary",
+            dataset_type="example_snapshot",
+            rows_written=3,
+            status="complete",
+        )
+
+    assert caplog.messages == [
+        "job_event command=example-builder event=run_summary "
+        "dataset_type=example_snapshot exchange=deribit rows_written=3 status=complete"
+    ]
+
+
+def test_dataset_debug_event_is_expressive_and_debug_only(caplog: pytest.LogCaptureFixture) -> None:
+    """Verify debug dataset events stay quiet at INFO and expose diagnostic fields at DEBUG."""
+
+    logger = logging.getLogger("test_dataset_debug_event_is_expressive_and_debug_only")
+    logger.setLevel(logging.INFO)
+
+    with caplog.at_level(logging.INFO, logger=logger.name):
+        cli._log_dataset_debug_event(
+            logger,
+            "example-builder",
+            "run_start",
+            dataset_type="example_snapshot",
+            lake_root="lake/bronze",
+            save_parquet_lake=True,
+            source="rest_example",
+            symbols=["BTC", "ETH"],
+        )
+    assert caplog.messages == []
+
+    logger.setLevel(logging.DEBUG)
+    with caplog.at_level(logging.DEBUG, logger=logger.name):
+        cli._log_dataset_debug_event(
+            logger,
+            "example-builder",
+            "run_start",
+            dataset_type="example_snapshot",
+            lake_root="lake/bronze",
+            save_parquet_lake=True,
+            source="rest_example",
+            symbols=["BTC", "ETH"],
+        )
+
+    assert caplog.messages == [
+        "job_event command=example-builder event=run_start "
+        "dataset_type=example_snapshot exchange=deribit lake_root=lake/bronze save_parquet_lake=true "
+        "source=rest_example symbols=BTC,ETH"
+    ]
+
+
+def test_module_scope_filter_maps_every_dataset_command() -> None:
+    """Verify every dataset command writes with its own module scope."""
+
+    scope_filter = ModuleScopeFilter()
+
+    for command, expected_scope in COMMAND_LOG_SCOPES.items():
+        record = logging.LogRecord(
+            name=f"crypto_live_loader.{command}",
+            level=logging.INFO,
+            pathname=__file__,
+            lineno=1,
+            msg="message",
+            args=(),
+            exc_info=None,
+        )
+        assert scope_filter.filter(record)
+        assert record.__dict__["module_scope"] == expected_scope
 
 
 def test_cron_layer_commands_accept_debug_flag() -> None:
