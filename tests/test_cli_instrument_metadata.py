@@ -71,3 +71,34 @@ def test_cli_instrument_metadata_bronze_builder_outputs_json(
     assert output["command"] == INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND
     assert output["dataset_type"] == "instrument_metadata_snapshot_daily"
     assert output["output_files"] == ["/tmp/instrument_metadata.parquet"]
+
+
+def test_cli_future_instrument_metadata_reports_future_dataset(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Future metadata should report the future-specific dataset type."""
+
+    monkeypatch.setattr(
+        cli,
+        "fetch_instruments",
+        lambda currency, kind, expired: [{"instrument_name": f"{currency}-PERPETUAL", "kind": kind}],
+    )
+    monkeypatch.setattr(cli, "save_instrument_metadata_snapshot_parquet_lake", lambda **kwargs: [])
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "main.py",
+            INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
+            "--symbols",
+            "SOL",
+            "--kind",
+            "future",
+            "--no-save-parquet-lake",
+        ],
+    )
+
+    cli.main()
+    output = json.loads(capsys.readouterr().out)
+
+    assert output["dataset_type"] == "future_instrument_metadata_snapshot_daily"

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
 INSTRUMENT_METADATA_DATASET_TYPE = "instrument_metadata_snapshot_daily"
+FUTURE_INSTRUMENT_METADATA_DATASET_TYPE = "future_instrument_metadata_snapshot_daily"
 INSTRUMENT_METADATA_SCHEMA_VERSION = "v1"
 INSTRUMENT_METADATA_SOURCE = "rest_get_instruments"
 
@@ -30,6 +31,9 @@ class InstrumentMetadataSnapshotRow:
     counter_currency: str | None
     settlement_currency: str | None
     instrument_type: str | None
+    settlement_period: str | None
+    price_index: str | None
+    state: str | None
     tick_size: float | None
     contract_size: float | None
     min_trade_amount: float | None
@@ -74,7 +78,7 @@ def normalize_instrument_metadata_rows(
         normalized.append(
             InstrumentMetadataSnapshotRow(
                 schema_version=schema_version,
-                dataset_type=INSTRUMENT_METADATA_DATASET_TYPE,
+                dataset_type=_metadata_dataset_type(row.get("kind")),
                 exchange="deribit",
                 source=source,
                 snapshot_date=snapshot_date,
@@ -87,6 +91,9 @@ def normalize_instrument_metadata_rows(
                 counter_currency=_to_optional_str(row.get("counter_currency")),
                 settlement_currency=_to_optional_str(row.get("settlement_currency")),
                 instrument_type=_to_optional_str(row.get("instrument_type")),
+                settlement_period=_to_optional_str(row.get("settlement_period")),
+                price_index=_to_optional_str(row.get("price_index")),
+                state=_to_optional_str(row.get("state")),
                 tick_size=_to_optional_float(row.get("tick_size")),
                 contract_size=_to_optional_float(row.get("contract_size")),
                 min_trade_amount=_to_optional_float(row.get("min_trade_amount")),
@@ -99,6 +106,12 @@ def normalize_instrument_metadata_rows(
             )
         )
     return normalized, errors
+
+
+def _metadata_dataset_type(kind: object) -> str:
+    if _to_optional_str(kind) == "future":
+        return FUTURE_INSTRUMENT_METADATA_DATASET_TYPE
+    return INSTRUMENT_METADATA_DATASET_TYPE
 
 
 def _timestamp_ms_to_datetime(value: object) -> datetime | None:

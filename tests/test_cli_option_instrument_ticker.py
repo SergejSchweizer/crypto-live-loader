@@ -33,7 +33,7 @@ def _isolate_cli_test_logs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
             "option_instrument_ticker": {
                 "currencies": ["BTC", "ETH", "SOL"],
                 "instruments": [],
-                "max_instruments_per_run": 20,
+                "max_instruments_per_run": 60,
                 "save_parquet_lake": True,
                 "lake_root": "lake/bronze",
                 "source": "rest_ticker",
