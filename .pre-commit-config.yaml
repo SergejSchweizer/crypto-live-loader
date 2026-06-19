@@ -32,17 +32,7 @@ repos:
         language: system
         pass_filenames: false
       - id: pytest
-        name: pytest
-        entry: .venv/bin/python -m pytest -q
-        language: system
-        pass_filenames: false
-      - id: coverage
-        name: coverage
-        entry: .venv/bin/python -m coverage run -m pytest
-        language: system
-        pass_filenames: false
-      - id: coverage-report
-        name: coverage report
-        entry: .venv/bin/python -m coverage report
+        name: pytest with coverage
+        entry: .venv/bin/python -m pytest --cov --cov-report=term-missing
         language: system
         pass_filenames: false
