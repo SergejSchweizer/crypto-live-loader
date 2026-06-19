@@ -757,14 +757,29 @@ python main.py validate-symbols --debug --symbols BTC ETH SOL
 .venv/bin/interrogate .
 .venv/bin/pydoclint api ingestion sources domain tests
 .venv/bin/pytest -q
-.venv/bin/coverage run -m pytest
-.venv/bin/coverage report
+.venv/bin/pytest --cov --cov-report=term-missing
 ```
+
+Serial execution is the default because it is faster on low-core ingestion hosts. Larger development
+or CI machines can distribute independent test files across a bounded worker pool:
+
+```bash
+make test-parallel PYTEST_WORKERS=4
+```
+
+File-level scheduling keeps tests from the same module in one process. Override `PYTEST_ARGS` to run
+only the files under active development.
 
 Convenience target:
 
 ```bash
 make check
+```
+
+For a short test-authoring feedback loop, stop on the first failure and run failed tests first:
+
+```bash
+make test-fast PYTEST_ARGS=tests/test_target_module.py
 ```
 
 ---
