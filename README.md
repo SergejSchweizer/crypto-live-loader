@@ -26,11 +26,12 @@ Author: Sergej Schweizer
   - [4.1 L2 Order Book (`dataset_type=l2_snapshot`)](#41-l2-order-book-dataset_typel2_snapshot)
   - [4.2 Options Summary (`dataset_type=options_ticker_snapshot_1m`)](#42-options-summary-dataset_typeoptions_ticker_snapshot_1m)
   - [4.3 Option Instrument Ticker (`dataset_type=option_instrument_ticker_snapshot_1m`)](#43-option-instrument-ticker-dataset_typeoption_instrument_ticker_snapshot_1m)
-  - [4.4 Instrument Metadata (`dataset_type=instrument_metadata_snapshot_daily`)](#44-instrument-metadata-dataset_typeinstrument_metadata_snapshot_daily)
-  - [4.5 Index Price (`dataset_type=index_price_snapshot_1m`)](#45-index-price-dataset_typeindex_price_snapshot_1m)
-  - [4.6 Volatility Index (`dataset_type=volatility_index_snapshot_1m`)](#46-volatility-index-dataset_typevolatility_index_snapshot_1m)
-  - [4.7 Futures Summary (`dataset_type=futures_summary_snapshot_1m`)](#47-futures-summary-dataset_typefutures_summary_snapshot_1m)
-  - [4.8 Recent Trade Tape (`dataset_type=recent_trade_snapshot_1m`)](#48-recent-trade-tape-dataset_typerecent_trade_snapshot_1m)
+  - [4.4 Option L2 Order Book (`dataset_type=option_l2_snapshot_1m`)](#44-option-l2-order-book-dataset_typeoption_l2_snapshot_1m)
+  - [4.5 Instrument Metadata (`dataset_type=instrument_metadata_snapshot_daily`)](#45-instrument-metadata-dataset_typeinstrument_metadata_snapshot_daily)
+  - [4.6 Index Price (`dataset_type=index_price_snapshot_1m`)](#46-index-price-dataset_typeindex_price_snapshot_1m)
+  - [4.7 Volatility Index (`dataset_type=volatility_index_snapshot_1m`)](#47-volatility-index-dataset_typevolatility_index_snapshot_1m)
+  - [4.8 Futures Summary (`dataset_type=futures_summary_snapshot_1m`)](#48-futures-summary-dataset_typefutures_summary_snapshot_1m)
+  - [4.9 Recent Trade Tape (`dataset_type=recent_trade_snapshot_1m`)](#49-recent-trade-tape-dataset_typerecent_trade_snapshot_1m)
 - [5. Storage Layout](#5-storage-layout)
 - [6. Configuration Model](#6-configuration-model)
 - [7. Example Commands](#7-example-commands)
@@ -105,6 +106,7 @@ Options:
 |---|---|---|---|---|---|
 | `options-bronze-builder` | `options_ticker_snapshot_1m` | `option` | `BTC ETH SOL` | `public/get_book_summary_by_currency` | Broad option-chain summary rows |
 | `option-instrument-ticker-bronze-builder` | `option_instrument_ticker_snapshot_1m` | `option` | `BTC ETH SOL` | `public/ticker` | Selected per-option IV, bid/ask IV, and Greeks |
+| `option-l2-bronze-builder` | `option_l2_snapshot_1m` | `option` | `BTC ETH SOL` | `public/get_order_book` | Selected per-option bid/ask depth and top-of-book IV context |
 | `futures-summary-bronze-builder` | `futures_summary_snapshot_1m` | `future`, `perp` | `BTC ETH SOL` | `public/get_book_summary_by_currency` | Dated futures and perpetual curve summary rows |
 | `recent-trades-bronze-builder` | `recent_trade_snapshot_1m` | `option`, `future`, `perp` | `BTC ETH SOL` | `public/get_last_trades_by_currency` | Recent trade tape for options, futures, and perpetuals |
 | `instrument-metadata-bronze-builder` | `instrument_metadata_snapshot_daily`, `future_instrument_metadata_snapshot_daily` | `option`, `future` | `BTC ETH SOL` | `public/get_instruments` | Active instrument metadata snapshots |
@@ -234,15 +236,16 @@ python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL 
 python main.py options-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
 python main.py futures-summary-bronze-builder --debug --symbols BTC ETH SOL
 python main.py option-instrument-ticker-bronze-builder --debug --symbols BTC ETH SOL --max-instruments-per-run 60
+python main.py option-l2-bronze-builder --debug --symbols BTC ETH SOL --depth 20 --max-instruments-per-run 60
 python main.py recent-trades-bronze-builder --debug --symbols BTC ETH SOL --kinds option future --count 1000
 python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
 python main.py volatility-index-bronze-builder --debug --symbols BTC ETH SOL --resolution 60
 ```
 
 The metadata job captures the active option universe, the options summary job provides broad chain
-liquidity context, the per-instrument ticker job captures the selected IV/Greeks panel, and the
-recent trade job captures signed flow and jump/volume-shock inputs used by downstream surface
-builders.
+liquidity context, the per-instrument ticker and option L2 jobs capture the selected IV/Greeks panel
+and bid/ask depth, and the recent trade job captures signed flow and jump/volume-shock inputs used
+by downstream surface builders.
 
 ---
 
@@ -399,7 +402,52 @@ Metadata join fields:
 | `contract_size`, `tick_size`, `min_trade_amount` | Tradability, notional interpretation, and liquidity filters |
 | `price_index`, `is_active`, `state` | Underlying reference and stale-contract filtering |
 
-## 4.4 Instrument Metadata (`dataset_type=instrument_metadata_snapshot_daily`)
+## 4.4 Option L2 Order Book (`dataset_type=option_l2_snapshot_1m`)
+
+### 1. Bronze Layer
+
+Market role: selected option bid/ask depth for quote quality, spread, microstructure, and liquidity
+features around the same IV/Greeks prediction universe used by the per-instrument ticker collector.
+
+Endpoint: `GET /api/v2/public/get_order_book?instrument_name=<option instrument>&depth=<depth>`
+
+Default command:
+
+```bash
+python main.py option-l2-bronze-builder --debug --symbols BTC ETH SOL --depth 20 --max-instruments-per-run 60
+```
+
+Selection policy:
+
+- Reuses the option ticker prediction universe selection from current option summaries.
+- Supports explicit `--instruments` for deterministic targeted captures.
+- Fetches sequentially and records per-instrument `fetch_duration_s` for debugging slow REST calls.
+- Persists the requested `depth` in both row data and partition layout.
+- Keeps raw `bids` and `asks` as price/amount level arrays without reconstructing a surface.
+
+Coverage contract:
+
+| Item | Contract |
+|---|---|
+| Target dataset | `option_l2_snapshot_1m` |
+| Live endpoint owner | `crypto-live-loader` only |
+| Assets | BTC, ETH, SOL |
+| SOL endpoint mapping | Fetch Deribit `USDC` option summaries and keep `SOL_USDC-*` instruments |
+| Fetch mode | Sequential, bounded per run, no parallel REST fan-out |
+| Operational default | `20` book levels for up to `60` instruments per currency per minute |
+
+Key fields:
+
+| Column | Market Meaning |
+|---|---|
+| `instrument_name`, `snapshot_time`, `exchange_timestamp` | Contract identity, capture time, and Deribit order-book timestamp |
+| `depth`, `bids`, `asks`, `bid_levels`, `ask_levels` | Requested and observed book depth per side |
+| `best_bid_price`, `best_ask_price`, `best_bid_amount`, `best_ask_amount` | Top-of-book quote state |
+| `bid_iv`, `ask_iv`, `mark_iv`, `underlying_price`, `index_price` | IV/RV alignment context from the order-book payload |
+| `open_interest`, `volume`, `volume_usd`, `high`, `low`, `price_change` | Liquidity and activity context |
+| `fetch_duration_s`, `run_id`, `raw_payload_hash` | Runtime diagnosis, replay lineage, and idempotency support |
+
+## 4.5 Instrument Metadata (`dataset_type=instrument_metadata_snapshot_daily`)
 
 ### 1. Bronze Layer
 
@@ -446,7 +494,7 @@ Fetched columns:
 | Contract rules | `tick_size`, `contract_size`, `min_trade_amount`, `is_active`, `state` |
 | Lifecycle/shape | `creation_timestamp`, `expiration_timestamp`, `option_type`, `strike`, `settlement_period`, `price_index` |
 
-## 4.5 Index Price (`dataset_type=index_price_snapshot_1m`)
+## 4.6 Index Price (`dataset_type=index_price_snapshot_1m`)
 
 ### 1. Bronze Layer
 
@@ -478,7 +526,7 @@ Fetched columns:
 | Time/lineage | `snapshot_time`, `event_time`, `ingested_at`, `run_id`, `raw_payload_hash` |
 | Price | `price` |
 
-## 4.6 Volatility Index (`dataset_type=volatility_index_snapshot_1m`)
+## 4.7 Volatility Index (`dataset_type=volatility_index_snapshot_1m`)
 
 ### 1. Bronze Layer
 
@@ -507,7 +555,7 @@ Fetched columns:
 | Candle | `timestamp`, `open`, `high`, `low`, `close` |
 | Time/lineage | `snapshot_time`, `ingested_at`, `run_id`, `raw_payload_hash` |
 
-## 4.7 Futures Summary (`dataset_type=futures_summary_snapshot_1m`)
+## 4.8 Futures Summary (`dataset_type=futures_summary_snapshot_1m`)
 
 ### 1. Bronze Layer
 
@@ -538,7 +586,7 @@ Fetched columns:
 | Curve/carry | `underlying_price`, `estimated_delivery_price`, `interest_rate` |
 | Liquidity/activity | `open_interest`, `volume`, `volume_usd` |
 
-## 4.8 Recent Trade Tape (`dataset_type=recent_trade_snapshot_1m`)
+## 4.9 Recent Trade Tape (`dataset_type=recent_trade_snapshot_1m`)
 
 ### 1. Bronze Layer
 
@@ -598,6 +646,8 @@ lake/bronze/
     exchange=<exchange>/instrument_type=option/currency=<currency>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
   dataset_type=option_instrument_ticker_snapshot_1m/
     exchange=<exchange>/instrument_type=option/currency=<currency>/instrument_name=<instrument_name>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
+  dataset_type=option_l2_snapshot_1m/
+    exchange=<exchange>/instrument_type=option/currency=<currency>/instrument_name=<instrument_name>/depth=<depth>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
   dataset_type=instrument_metadata_snapshot_daily/
     exchange=<exchange>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
   dataset_type=future_instrument_metadata_snapshot_daily/
@@ -633,6 +683,7 @@ Key controls:
 | L2 ingestion | `ingestion.symbols`, `ingestion.levels`, `ingestion.snapshot_count`, `ingestion.poll_interval_s`, `ingestion.max_runtime_s` |
 | Options summary | `ingestion.options.*` |
 | Option instrument ticker | `ingestion.option_instrument_ticker.*` |
+| Option L2 order book | `ingestion.option_l2.*` |
 | Futures summary | `ingestion.futures_summary.*` |
 | Instrument metadata | `ingestion.instrument_metadata.*` |
 | Index price | `ingestion.index_price.*` |
@@ -642,15 +693,18 @@ Key controls:
 Important behavior:
 
 - `max_runtime_s = 0` disables the L2 runtime budget.
-- Options, option instrument ticker, futures summary, instrument metadata, volatility-index, and index-price builders default to
-  saving parquet output.
+- Options, option instrument ticker, option L2, futures summary, instrument metadata,
+  volatility-index, and index-price builders default to saving parquet output.
 - REST calls are sequential and bounded by HTTP timeout/retry settings.
 - `ingestion.option_instrument_ticker.max_instruments_per_run` caps the selected universe per
   currency for each minute run.
+- `ingestion.option_l2.depth` controls option book depth, and
+  `ingestion.option_l2.max_instruments_per_run` caps the selected universe per currency for each
+  minute run.
 - `ingestion.recent_trades.lookback_seconds` controls the restart-safe overlap window for recent
   trade collection.
-- Cron should use `flock` for per-instrument ticker and recent-trade commands to avoid overlapping
-  minute runs.
+- Cron should use `flock` for per-instrument ticker, option L2, and recent-trade commands to avoid
+  overlapping minute runs.
 
 ---
 
@@ -663,6 +717,7 @@ python main.py l2-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-la
 python main.py options-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
 python main.py futures-summary-bronze-builder --debug --symbols BTC ETH SOL
 python main.py option-instrument-ticker-bronze-builder --debug --symbols BTC ETH SOL --max-instruments-per-run 60
+python main.py option-l2-bronze-builder --debug --symbols BTC ETH SOL --depth 20 --max-instruments-per-run 60
 python main.py recent-trades-bronze-builder --debug --symbols BTC ETH SOL --kinds option future --count 1000
 python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind option
 python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind future
@@ -683,6 +738,7 @@ python main.py validate-symbols --debug --symbols BTC ETH SOL
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-bronze-builder --debug --symbols BTC ETH SOL
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py futures-summary-bronze-builder --debug --symbols BTC ETH SOL
 * * * * * cd /home/vcs/git/crypto-live-loader && flock -n .logs/option-instrument-ticker-bronze-builder.cron.lock .venv/bin/python main.py option-instrument-ticker-bronze-builder --debug --symbols BTC ETH SOL --max-instruments-per-run 60
+* * * * * cd /home/vcs/git/crypto-live-loader && flock -n .logs/option-l2-bronze-builder.cron.lock .venv/bin/python main.py option-l2-bronze-builder --debug --symbols BTC ETH SOL --depth 20 --max-instruments-per-run 60
 * * * * * cd /home/vcs/git/crypto-live-loader && flock -n .logs/recent-trades-bronze-builder.cron.lock .venv/bin/python main.py recent-trades-bronze-builder --debug --symbols BTC ETH SOL --kinds option future --count 1000
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py volatility-index-bronze-builder --debug --symbols BTC ETH SOL --resolution 60
@@ -724,6 +780,7 @@ Upsert-based datasets merge by natural keys and deterministic sort order:
 | `l2_snapshot` | `exchange`, `instrument_type`, `symbol`, `depth`, `source`, `event_time` |
 | `options_ticker_snapshot_1m` | `exchange`, `currency`, `instrument_name`, `source`, `snapshot_time` |
 | `option_instrument_ticker_snapshot_1m` | `exchange`, `instrument_name`, `source`, `snapshot_time` |
+| `option_l2_snapshot_1m` | `exchange`, `instrument_name`, `source`, `depth`, `exchange_timestamp` |
 | `instrument_metadata_snapshot_daily` | `exchange`, `instrument_name`, `snapshot_date` |
 | `future_instrument_metadata_snapshot_daily` | `exchange`, `instrument_name`, `snapshot_date` |
 | `index_price_snapshot_1m` | `exchange`, `index_name`, `event_time`, `source` |
@@ -759,6 +816,8 @@ Built-in validation and normalization behavior:
 - SOL trade ingestion filters Deribit `USDC` trade responses to `SOL_USDC-*`.
 - Per-instrument ticker selection requires usable quote, mark, or liquidity information before a
   contract enters the IV/RV prediction universe.
+- Option L2 rows preserve the selected universe book depth and observed bid/ask level counts for
+  quote-quality filtering.
 - Recent trade overlap windows are deduped by trade id during parquet upsert.
 - Per-instrument ticker rows preserve raw payload hashes for audit and replay.
 - External calls are bounded by configured timeout and retry settings.
@@ -771,8 +830,8 @@ Built-in validation and normalization behavior:
 - The repository polls public REST endpoints only; websocket microburst capture is out of scope.
 - Local parquet storage is the only lake backend.
 - Local file locks protect partition writes but do not provide distributed coordination.
-- Per-instrument option ticker selection is optimized for IV/RV forecasting, not exhaustive option
-  archival of every listed contract every minute.
+- Per-instrument option ticker and option L2 selection are optimized for IV/RV forecasting, not
+  exhaustive option archival of every listed contract every minute.
 
 ---
 

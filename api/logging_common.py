@@ -12,6 +12,7 @@ COMMAND_LOG_SCOPES = {
     "instrument-metadata-bronze-builder": "instrument_metadata",
     "l2-bronze-builder": "l2",
     "bronze-builder": "l2",
+    "option-l2-bronze-builder": "option_l2",
     "option-instrument-ticker-bronze-builder": "option_instrument_ticker",
     "options-bronze-builder": "options",
     "recent-trades-bronze-builder": "recent_trades",
