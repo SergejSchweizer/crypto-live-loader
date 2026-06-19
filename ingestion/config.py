@@ -50,6 +50,17 @@ DEFAULT_CONFIG: Config = {
             "schema_version": "v1",
             "json_output": False,
         },
+        "option_l2": {
+            "currencies": ["BTC", "ETH", "SOL"],
+            "instruments": [],
+            "depth": 20,
+            "max_instruments_per_run": 60,
+            "save_parquet_lake": True,
+            "lake_root": "lake/bronze",
+            "source": "rest_get_order_book",
+            "schema_version": "v1",
+            "json_output": False,
+        },
         "futures_summary": {
             "currencies": ["BTC", "ETH", "SOL"],
             "save_parquet_lake": True,

@@ -18,6 +18,7 @@ from api.constants import (
     INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
     LEGACY_BRONZE_BUILDER_COMMAND,
     OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
+    OPTION_L2_BRONZE_BUILDER_COMMAND,
     OPTIONS_BRONZE_BUILDER_COMMAND,
     RECENT_TRADES_BRONZE_BUILDER_COMMAND,
     VALIDATE_SYMBOLS_COMMAND,
@@ -92,6 +93,20 @@ from ingestion.option_instrument_ticker import (
     utc_run_id as option_instrument_ticker_utc_run_id,
 )
 from ingestion.option_instrument_ticker_lake import save_option_instrument_ticker_snapshot_parquet_lake
+from ingestion.option_l2 import (
+    OPTION_L2_DATASET_TYPE,
+    OPTION_L2_SCHEMA_VERSION,
+    OPTION_L2_SOURCE,
+    OptionL2SnapshotRow,
+    normalize_option_l2_snapshot_rows,
+)
+from ingestion.option_l2 import (
+    snapshot_time_floor_minute as option_l2_snapshot_time_floor_minute,
+)
+from ingestion.option_l2 import (
+    utc_run_id as option_l2_utc_run_id,
+)
+from ingestion.option_l2_lake import save_option_l2_snapshot_parquet_lake
 from ingestion.option_ticker_universe import select_option_ticker_prediction_universe
 from ingestion.options import (
     OPTION_TICKER_DATASET_TYPE,
@@ -141,6 +156,7 @@ from ingestion.volatility_index_lake import save_volatility_index_snapshot_parqu
 from sources.deribit_futures import fetch_futures_book_summary_rows
 from sources.deribit_index_price import fetch_index_price
 from sources.deribit_instruments import fetch_instruments
+from sources.deribit_option_order_book import fetch_option_order_book
 from sources.deribit_option_ticker import fetch_option_ticker
 from sources.deribit_options import (
     fetch_option_book_summary_rows,
@@ -158,6 +174,7 @@ __all__ = ["build_parser", "main"]
 
 SnapshotsBySymbol = dict[str, list[L2Snapshot]]
 OptionRowsByCurrency = dict[str, list[OptionTickerSnapshotRow]]
+OptionL2RowsByInstrument = dict[str, OptionL2SnapshotRow]
 OptionInstrumentTickerRowsByInstrument = dict[str, OptionInstrumentTickerSnapshotRow]
 InstrumentMetadataRowsByDate = dict[str, list[InstrumentMetadataSnapshotRow]]
 IndexPriceRowsBySymbol = dict[str, list[IndexPriceSnapshotRow]]
@@ -361,6 +378,73 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         "Print JSON output",
     )
     _debug_flag(futures_summary_parser)
+
+    option_l2_config = config_section(ingestion_config, "option_l2")
+    option_l2_parser = subparsers.add_parser(
+        OPTION_L2_BRONZE_BUILDER_COMMAND,
+        help="Fetch Deribit selected option order-book snapshots into the bronze parquet lake",
+    )
+    option_l2_parser.add_argument(
+        "--exchange",
+        choices=["deribit"],
+        default="deribit",
+    )
+    option_l2_parser.add_argument(
+        "--symbols",
+        "--currencies",
+        dest="currencies",
+        nargs="+",
+        default=config_str_list(option_l2_config, "currencies", ["BTC", "ETH", "SOL"]),
+        type=str,
+        help="Option symbols/currencies used when discovering active instruments",
+    )
+    option_l2_parser.add_argument(
+        "--instruments",
+        nargs="+",
+        default=config_str_list(option_l2_config, "instruments", []),
+        type=str,
+        help="Explicit Deribit option instruments to fetch; skips currency discovery when provided",
+    )
+    option_l2_parser.add_argument(
+        "--depth",
+        type=int,
+        default=config_int(option_l2_config, "depth", 20),
+        help="Number of order-book levels per side to request for each option",
+    )
+    option_l2_parser.add_argument(
+        "--lake-root",
+        default=config_str(option_l2_config, "lake_root", "lake/bronze"),
+        help="Root directory for parquet lake files",
+    )
+    option_l2_parser.add_argument(
+        "--max-instruments-per-run",
+        type=int,
+        default=config_int(option_l2_config, "max_instruments_per_run", 60),
+        help="Maximum selected option instruments to fetch sequentially per currency",
+    )
+    _boolean_optional_flag(
+        option_l2_parser,
+        "save-parquet-lake",
+        config_bool(option_l2_config, "save_parquet_lake", True),
+        "Save selected option order-book snapshots to bronze parquet lake partitions",
+    )
+    option_l2_parser.add_argument(
+        "--schema-version",
+        default=config_str(option_l2_config, "schema_version", OPTION_L2_SCHEMA_VERSION),
+        help="Schema version tag to annotate each normalized row",
+    )
+    option_l2_parser.add_argument(
+        "--source",
+        default=config_str(option_l2_config, "source", OPTION_L2_SOURCE),
+        help="Source identifier written to bronze rows",
+    )
+    _boolean_optional_flag(
+        option_l2_parser,
+        "json-output",
+        config_bool(option_l2_config, "json_output", config_bool(ingestion_config, "json_output", True)),
+        "Print JSON output",
+    )
+    _debug_flag(option_l2_parser)
 
     option_instrument_ticker_config = config_section(ingestion_config, "option_instrument_ticker")
     option_instrument_ticker_parser = subparsers.add_parser(
@@ -868,6 +952,31 @@ def _fetch_option_ticker_rows_for_instruments(
         except Exception as exc:  # noqa: BLE001
             errors[instrument_name] = str(exc)
     return rows_by_instrument, errors
+
+
+def _fetch_option_l2_rows_for_instruments(
+    instruments: list[str],
+    *,
+    depth: int,
+) -> tuple[dict[str, dict[str, object]], dict[str, float], dict[str, str]]:
+    """Fetch per-instrument option order-book rows sequentially."""
+
+    rows_by_instrument: dict[str, dict[str, object]] = {}
+    fetch_durations_s: dict[str, float] = {}
+    errors: dict[str, str] = {}
+
+    for instrument_name in instruments:
+        started_at = perf_counter()
+        try:
+            rows_by_instrument[instrument_name] = fetch_option_order_book(
+                instrument_name=instrument_name,
+                depth=depth,
+            )
+            fetch_durations_s[instrument_name] = perf_counter() - started_at
+        except Exception as exc:  # noqa: BLE001
+            fetch_durations_s[instrument_name] = perf_counter() - started_at
+            errors[instrument_name] = str(exc)
+    return rows_by_instrument, fetch_durations_s, errors
 
 
 def _fetch_recent_trade_rows_for_requests(
@@ -1413,6 +1522,160 @@ def _limit_option_ticker_instruments_by_currency(
     for currency_instruments in instruments_by_currency.values():
         selected.extend(currency_instruments[:requested_count])
     return selected
+
+
+def _run_option_l2_bronze_builder(
+    args: argparse.Namespace,
+    logger: logging.Logger,
+) -> None:
+    """Run selected Deribit option order-book collection and optional Bronze persistence."""
+
+    started_at = perf_counter()
+    currencies = _normalize_cli_currencies(cast(list[str], args.currencies))
+    explicit_instruments = _normalize_cli_instruments(cast(list[str], args.instruments))
+    depth = int(args.depth)
+    if depth <= 0:
+        raise ValueError("depth must be positive")
+    max_instruments_per_currency = max(1, int(args.max_instruments_per_run))
+    _log_dataset_debug_event(
+        logger,
+        OPTION_L2_BRONZE_BUILDER_COMMAND,
+        "run_start",
+        dataset_type=OPTION_L2_DATASET_TYPE,
+        currencies=currencies,
+        depth=depth,
+        explicit_instruments=len(explicit_instruments),
+        lake_root=cast(str, args.lake_root),
+        max_instruments_per_currency=max_instruments_per_currency,
+        save_parquet_lake=bool(args.save_parquet_lake),
+        schema_version=cast(str, args.schema_version),
+        source=cast(str, args.source),
+    )
+    instruments_by_currency, discovery_errors = _select_option_ticker_prediction_universe_by_currency(
+        currencies=currencies,
+        explicit_instruments=explicit_instruments,
+        max_instruments_per_currency=max_instruments_per_currency,
+    )
+    run_id = option_l2_utc_run_id()
+    snapshot_time = option_l2_snapshot_time_floor_minute()
+    ingested_at = datetime.now(UTC)
+    instruments = _limit_option_ticker_instruments_by_currency(
+        instruments_by_currency,
+        explicit_instruments=explicit_instruments,
+        max_instruments_per_run=max_instruments_per_currency,
+    )
+    _log_dataset_debug_event(
+        logger,
+        OPTION_L2_BRONZE_BUILDER_COMMAND,
+        "universe_selected",
+        dataset_type=OPTION_L2_DATASET_TYPE,
+        discovery_errors=len(discovery_errors),
+        instruments_by_currency={
+            currency: len(currency_instruments)
+            for currency, currency_instruments in sorted(instruments_by_currency.items())
+        },
+        instruments_requested=len(instruments),
+        run_id=run_id,
+        snapshot_time=snapshot_time.isoformat().replace("+00:00", "Z"),
+    )
+
+    raw_rows_by_instrument, fetch_durations_s, fetch_errors = _fetch_option_l2_rows_for_instruments(
+        instruments=instruments,
+        depth=depth,
+    )
+    _log_dataset_debug_event(
+        logger,
+        OPTION_L2_BRONZE_BUILDER_COMMAND,
+        "fetch_complete",
+        dataset_type=OPTION_L2_DATASET_TYPE,
+        depth=depth,
+        fetch_errors=len(fetch_errors),
+        instruments_requested=len(instruments),
+        raw_rows=len(raw_rows_by_instrument),
+        slowest_fetch_s=max(fetch_durations_s.values(), default=0.0),
+    )
+    rows, normalization_errors = normalize_option_l2_snapshot_rows(
+        raw_rows_by_instrument,
+        run_id=run_id,
+        snapshot_time=snapshot_time,
+        ingested_at=ingested_at,
+        depth=depth,
+        fetch_durations_s=fetch_durations_s,
+        source=cast(str, args.source),
+        schema_version=cast(str, args.schema_version),
+    )
+    _log_dataset_debug_event(
+        logger,
+        OPTION_L2_BRONZE_BUILDER_COMMAND,
+        "normalization_complete",
+        dataset_type=OPTION_L2_DATASET_TYPE,
+        ask_levels=sum(row.ask_levels for row in rows),
+        bid_levels=sum(row.bid_levels for row in rows),
+        normalization_errors=len(normalization_errors),
+        rows_written=len(rows),
+    )
+
+    output_files: list[str] = []
+    if bool(args.save_parquet_lake):
+        output_files = save_option_l2_snapshot_parquet_lake(
+            rows=rows,
+            lake_root=cast(str, args.lake_root),
+        )
+    _log_dataset_debug_event(
+        logger,
+        OPTION_L2_BRONZE_BUILDER_COMMAND,
+        "persistence_complete",
+        dataset_type=OPTION_L2_DATASET_TYPE,
+        files=len(output_files),
+        output_files=output_files,
+        save_parquet_lake=bool(args.save_parquet_lake),
+    )
+
+    errors = discovery_errors + list(fetch_errors.values()) + normalization_errors
+    instruments_discovered = sum(len(currency_instruments) for currency_instruments in instruments_by_currency.values())
+    currency_results = {
+        currency: {
+            "instruments_discovered": len(currency_instruments),
+            "instruments_requested": len(
+                [instrument for instrument in instruments if instrument in currency_instruments]
+            ),
+        }
+        for currency, currency_instruments in instruments_by_currency.items()
+    }
+    output = {
+        "command": OPTION_L2_BRONZE_BUILDER_COMMAND,
+        "exchange": cast(str, args.exchange),
+        "dataset_type": OPTION_L2_DATASET_TYPE,
+        "run_id": run_id,
+        "snapshot_time": snapshot_time.isoformat().replace("+00:00", "Z"),
+        "requested_currencies": currencies,
+        "depth": depth,
+        "instruments_discovered": instruments_discovered,
+        "instruments_requested": len(instruments),
+        "currency_results": currency_results,
+        "rows_written": len(rows),
+        "output_files": output_files,
+        "errors": errors,
+    }
+    _emit_json_output(bool(args.json_output), output)
+    _log_dataset_event(
+        logger,
+        logging.INFO,
+        OPTION_L2_BRONZE_BUILDER_COMMAND,
+        "run_summary",
+        dataset_type=OPTION_L2_DATASET_TYPE,
+        currencies=currencies,
+        depth=depth,
+        elapsed_s=perf_counter() - started_at,
+        errors=len(errors),
+        files=len(output_files),
+        instruments_discovered=instruments_discovered,
+        instruments_requested=len(instruments),
+        rows_written=len(rows),
+        run_id=run_id,
+        snapshot_time=output["snapshot_time"],
+        status="complete" if not errors else "partial",
+    )
 
 
 def _run_option_instrument_ticker_bronze_builder(
@@ -2135,6 +2398,15 @@ def _handle_futures_summary_bronze_builder(args: argparse.Namespace, logger: log
     _run_futures_summary_bronze_builder(args=args, logger=logger)
 
 
+def _handle_option_l2_bronze_builder(
+    args: argparse.Namespace,
+    logger: logging.Logger,
+    config: Config,
+) -> None:
+    _ = config
+    _run_option_l2_bronze_builder(args=args, logger=logger)
+
+
 def _handle_option_instrument_ticker_bronze_builder(
     args: argparse.Namespace,
     logger: logging.Logger,
@@ -2178,6 +2450,7 @@ def command_handlers() -> dict[str, CommandHandler]:
         BRONZE_BUILDER_COMMAND: _handle_bronze_builder,
         OPTIONS_BRONZE_BUILDER_COMMAND: _handle_options_bronze_builder,
         FUTURES_SUMMARY_BRONZE_BUILDER_COMMAND: _handle_futures_summary_bronze_builder,
+        OPTION_L2_BRONZE_BUILDER_COMMAND: _handle_option_l2_bronze_builder,
         OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND: _handle_option_instrument_ticker_bronze_builder,
         INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND: _handle_instrument_metadata_bronze_builder,
         INDEX_PRICE_BRONZE_BUILDER_COMMAND: _handle_index_price_bronze_builder,
