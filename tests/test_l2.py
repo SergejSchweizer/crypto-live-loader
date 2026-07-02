@@ -1,4 +1,4 @@
-"""Tests for L2 snapshot ingestion."""
+"""Tests for perpetual L2 snapshot ingestion."""
 
 from __future__ import annotations
 
@@ -7,7 +7,7 @@ from dataclasses import dataclass
 import pytest
 
 from domain.models import OrderLevel, RawSnapshot
-from ingestion.l2 import fetch_l2_snapshots_for_symbols
+from ingestion.l2 import fetch_perp_l2_snapshot_1m_for_symbols
 
 
 @dataclass(frozen=True)
@@ -33,7 +33,7 @@ class _StubAdapter:
         )
 
 
-def test_fetch_l2_snapshots_for_symbols_fetches_symbols_sequentially(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_fetch_perp_l2_snapshot_1m_for_symbols_fetches_symbols_sequentially(monkeypatch: pytest.MonkeyPatch) -> None:
     events: list[tuple[str, str]] = []
 
     class Adapter(_StubAdapter):
@@ -57,7 +57,7 @@ def test_fetch_l2_snapshots_for_symbols_fetches_symbols_sequentially(monkeypatch
 
     del monkeypatch
 
-    snapshots = fetch_l2_snapshots_for_symbols(
+    snapshots = fetch_perp_l2_snapshot_1m_for_symbols(
         exchange="deribit",
         symbols=["BTC", "ETH"],
         depth=50,
@@ -72,7 +72,7 @@ def test_fetch_l2_snapshots_for_symbols_fetches_symbols_sequentially(monkeypatch
     assert len(snapshots["ETH"]) == 1
 
 
-def test_fetch_l2_snapshots_for_symbols_logs_and_skips_failed_symbol(
+def test_fetch_perp_l2_snapshot_1m_for_symbols_logs_and_skips_failed_symbol(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Verify one failed symbol does not discard the whole polling tick."""
@@ -85,7 +85,7 @@ def test_fetch_l2_snapshots_for_symbols_logs_and_skips_failed_symbol(
             return super().fetch_snapshot(symbol=symbol, depth=depth)
 
     with caplog.at_level("WARNING", logger="ingestion.l2"):
-        snapshots = fetch_l2_snapshots_for_symbols(
+        snapshots = fetch_perp_l2_snapshot_1m_for_symbols(
             exchange="deribit",
             symbols=["BTC", "ETH"],
             depth=50,
@@ -100,7 +100,7 @@ def test_fetch_l2_snapshots_for_symbols_logs_and_skips_failed_symbol(
     assert "L2 snapshot fetch failed symbol=ETH" in caplog.text
 
 
-def test_fetch_l2_snapshots_for_symbols_respects_expired_runtime_budget(
+def test_fetch_perp_l2_snapshot_1m_for_symbols_respects_expired_runtime_budget(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Verify an expired runtime budget stops polling before network calls."""
@@ -117,7 +117,7 @@ def test_fetch_l2_snapshots_for_symbols_respects_expired_runtime_budget(
 
     monkeypatch.setattr(l2, "_deadline_from_config", lambda config: 0.0)
 
-    snapshots = fetch_l2_snapshots_for_symbols(
+    snapshots = fetch_perp_l2_snapshot_1m_for_symbols(
         exchange="deribit",
         symbols=["BTC"],
         depth=50,

@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-BRONZE_BUILDER_COMMAND = "l2-bronze-builder"
+BRONZE_BUILDER_COMMAND = "perp-l2-bronze-builder"
 FUTURES_SUMMARY_BRONZE_BUILDER_COMMAND = "futures-summary-bronze-builder"
+LEGACY_L2_BRONZE_BUILDER_COMMAND = "l2-bronze-builder"
 LEGACY_BRONZE_BUILDER_COMMAND = "bronze-builder"
 OPTIONS_BRONZE_BUILDER_COMMAND = "options-bronze-builder"
 OPTION_L2_BRONZE_BUILDER_COMMAND = "option-l2-bronze-builder"

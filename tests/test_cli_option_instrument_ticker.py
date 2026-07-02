@@ -141,7 +141,7 @@ def test_option_instrument_ticker_cli_selects_currency_universe(monkeypatch: pyt
         calls.append(request.source_currency)
         return [
             {
-                "instrument_name": "SOL_USDC-30JUN26-250-C",
+                "instrument_name": "SOL_USDC-30SEP26-250-C",
                 "underlying_price": 250.0,
                 "ask_price": 0.1,
                 "bid_price": 0.09,
@@ -159,7 +159,7 @@ def test_option_instrument_ticker_cli_selects_currency_universe(monkeypatch: pyt
 
     assert errors == []
     assert calls == ["USDC"]
-    assert instruments_by_currency == {"SOL": ["SOL_USDC-30JUN26-250-C"]}
+    assert instruments_by_currency == {"SOL": ["SOL_USDC-30SEP26-250-C"]}
 
 
 def test_option_instrument_ticker_cli_fetches_prediction_universe_for_each_currency(

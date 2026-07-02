@@ -1,4 +1,4 @@
-"""L2 snapshot ingestion utilities."""
+"""Perpetual L2 snapshot ingestion utilities."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ LOGGER = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class L2FetchConfig:
-    """Runtime configuration for bounded L2 snapshot collection."""
+    """Runtime configuration for bounded perpetual L2 snapshot collection."""
 
     exchange: str
     symbols: list[str]
@@ -31,7 +31,7 @@ class L2FetchConfig:
 
 @dataclass(frozen=True)
 class L2Snapshot:
-    """One normalized L2 snapshot.
+    """One normalized perpetual L2 snapshot.
 
     Attributes:
         exchange (str): Venue identifier that produced the snapshot.
@@ -80,7 +80,7 @@ class L2Snapshot:
     current_funding: float | None
 
 
-def fetch_l2_snapshots_for_symbols(
+def fetch_perp_l2_snapshot_1m_for_symbols(
     exchange: str,
     symbols: list[str],
     depth: int,
@@ -90,7 +90,7 @@ def fetch_l2_snapshots_for_symbols(
     concurrency: int | None = None,
     adapter: SourceAdapter | None = None,
 ) -> dict[str, list[L2Snapshot]]:
-    """Collect L2 snapshots for all symbols using async polling ticks."""
+    """Collect perpetual L2 snapshots for all symbols using async polling ticks."""
 
     config = L2FetchConfig(
         exchange=exchange,
@@ -103,7 +103,7 @@ def fetch_l2_snapshots_for_symbols(
         adapter=adapter,
     )
     return asyncio.run(
-        fetch_l2_snapshots_for_symbols_async(
+        fetch_perp_l2_snapshot_1m_for_symbols_async(
             exchange=config.exchange,
             symbols=config.symbols,
             depth=config.depth,
@@ -116,7 +116,7 @@ def fetch_l2_snapshots_for_symbols(
     )
 
 
-async def fetch_l2_snapshots_for_symbols_async(
+async def fetch_perp_l2_snapshot_1m_for_symbols_async(
     exchange: str,
     symbols: list[str],
     depth: int,
@@ -126,7 +126,7 @@ async def fetch_l2_snapshots_for_symbols_async(
     concurrency: int | None = None,
     adapter: SourceAdapter | None = None,
 ) -> dict[str, list[L2Snapshot]]:
-    """Collect L2 snapshots for all symbols sequentially on each polling tick."""
+    """Collect perpetual L2 snapshots for all symbols sequentially on each polling tick."""
 
     config = L2FetchConfig(
         exchange=exchange,
@@ -281,18 +281,18 @@ def _snapshot_from_raw(raw: RawSnapshot, fetch_duration_s: float = 0.0) -> L2Sna
     )
 
 
-def l2_snapshot_record(
+def perp_l2_snapshot_1m_record(
     snapshot: L2Snapshot,
     depth: int,
     run_id: str,
     ingested_at: datetime,
     source: str = "rest_order_book",
 ) -> dict[str, object]:
-    """Convert ``L2Snapshot`` to raw bronze parquet row format."""
+    """Convert ``L2Snapshot`` to the perpetual L2 Bronze parquet row format."""
 
     return {
         "schema_version": "v1",
-        "dataset_type": "l2_snapshot",
+        "dataset_type": "perp_l2_snapshot_1m",
         "exchange": snapshot.exchange,
         "symbol": snapshot.symbol,
         "instrument_type": "perp",
@@ -312,12 +312,12 @@ def l2_snapshot_record(
     }
 
 
-def l2_snapshot_partition_key(
+def perp_l2_snapshot_1m_partition_key(
     snapshot: L2Snapshot,
     depth: int,
     source: str,
 ) -> tuple[str, str, str, int, str, str, str, str, str]:
-    """Build raw bronze partition key for an L2 snapshot."""
+    """Build the Bronze partition key for a perpetual L2 snapshot."""
 
     return (
         snapshot.exchange,

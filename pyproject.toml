@@ -44,6 +44,17 @@ exclude = ["tests*", "notebooks*"]
 [tool.pytest.ini_options]
 pythonpath = ["."]
 addopts = "-q --strict-config --strict-markers"
+testpaths = ["tests"]
+norecursedirs = [
+  ".git",
+  ".logs",
+  ".mypy_cache",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".state",
+  ".venv",
+  "lake",
+]
 filterwarnings = ["error"]
 
 [tool.ruff]

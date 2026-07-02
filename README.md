@@ -23,7 +23,7 @@ Author: Sergej Schweizer
   - [3.2 Python Environment Setup](#32-python-environment-setup)
   - [3.3 Quick Start](#33-quick-start)
 - [4. Bronze Datasets](#4-bronze-datasets)
-  - [4.1 L2 Order Book (`dataset_type=l2_snapshot`)](#41-l2-order-book-dataset_typel2_snapshot)
+  - [4.1 Perpetual L2 Order Book (`dataset_type=perp_l2_snapshot_1m`)](#41-perpetual-l2-order-book-dataset_typeperp_l2_snapshot_1m)
   - [4.2 Options Summary (`dataset_type=options_ticker_snapshot_1m`)](#42-options-summary-dataset_typeoptions_ticker_snapshot_1m)
   - [4.3 Option Instrument Ticker (`dataset_type=option_instrument_ticker_snapshot_1m`)](#43-option-instrument-ticker-dataset_typeoption_instrument_ticker_snapshot_1m)
   - [4.4 Option L2 Order Book (`dataset_type=option_l2_snapshot_1m`)](#44-option-l2-order-book-dataset_typeoption_l2_snapshot_1m)
@@ -94,11 +94,11 @@ Silver and Gold functionality is intentionally out of scope for this repository.
 
 ### Domain Groups
 
-Order Book:
+Perpetual Order Book:
 
 | CLI Command | Bronze `dataset_type` | Instrument Type | Default Symbols | Source Endpoint | Description |
 |---|---|---|---|---|---|
-| `l2-bronze-builder` | `l2_snapshot` | `perp` | `BTC ETH SOL` | `public/get_order_book` | Raw perpetual order-book snapshots |
+| `perp-l2-bronze-builder` | `perp_l2_snapshot_1m` | `perp` | `BTC ETH SOL` | `public/get_order_book` | Raw perpetual order-book snapshots |
 
 Options:
 
@@ -255,7 +255,7 @@ All datasets are Bronze raw snapshots. Shared metadata columns include source id
 `run_id`, ingestion timestamps, dataset type, exchange, and schema version. Dataset-specific
 timestamps are preserved as the natural event or snapshot time.
 
-## 4.1 L2 Order Book (`dataset_type=l2_snapshot`)
+## 4.1 Perpetual L2 Order Book (`dataset_type=perp_l2_snapshot_1m`)
 
 ### 1. Bronze Layer
 
@@ -267,7 +267,7 @@ Endpoint: `GET /api/v2/public/get_order_book`
 Default command:
 
 ```bash
-python main.py l2-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
+python main.py perp-l2-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
 ```
 
 Key fields:
@@ -640,7 +640,7 @@ Bronze root:
 
 ```text
 lake/bronze/
-  dataset_type=l2_snapshot/
+  dataset_type=perp_l2_snapshot_1m/
     exchange=<exchange>/instrument_type=perp/symbol=<symbol>/depth=<depth>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
   dataset_type=options_ticker_snapshot_1m/
     exchange=<exchange>/instrument_type=option/currency=<currency>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
@@ -713,7 +713,7 @@ Important behavior:
 ## 7.1 Bronze Collectors
 
 ```bash
-python main.py l2-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
+python main.py perp-l2-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
 python main.py options-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
 python main.py futures-summary-bronze-builder --debug --symbols BTC ETH SOL
 python main.py option-instrument-ticker-bronze-builder --debug --symbols BTC ETH SOL --max-instruments-per-run 60
@@ -734,7 +734,7 @@ python main.py validate-symbols --debug --symbols BTC ETH SOL
 ## 7.3 Production Cron
 
 ```cron
-* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py l2-bronze-builder --debug --symbols BTC ETH SOL
+* * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py perp-l2-bronze-builder --debug --symbols BTC ETH SOL
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-bronze-builder --debug --symbols BTC ETH SOL
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py futures-summary-bronze-builder --debug --symbols BTC ETH SOL
 * * * * * cd /home/vcs/git/crypto-live-loader && flock -n .logs/option-instrument-ticker-bronze-builder.cron.lock .venv/bin/python main.py option-instrument-ticker-bronze-builder --debug --symbols BTC ETH SOL --max-instruments-per-run 60
@@ -792,7 +792,7 @@ Upsert-based datasets merge by natural keys and deterministic sort order:
 
 | Dataset | Natural Key |
 |---|---|
-| `l2_snapshot` | `exchange`, `instrument_type`, `symbol`, `depth`, `source`, `event_time` |
+| `perp_l2_snapshot_1m` | `exchange`, `instrument_type`, `symbol`, `depth`, `source`, `event_time` |
 | `options_ticker_snapshot_1m` | `exchange`, `currency`, `instrument_name`, `source`, `snapshot_time` |
 | `option_instrument_ticker_snapshot_1m` | `exchange`, `instrument_name`, `source`, `snapshot_time` |
 | `option_l2_snapshot_1m` | `exchange`, `instrument_name`, `source`, `depth`, `exchange_timestamp` |
