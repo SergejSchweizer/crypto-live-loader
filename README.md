@@ -23,7 +23,7 @@ Author: Sergej Schweizer
   - [3.2 Python Environment Setup](#32-python-environment-setup)
   - [3.3 Quick Start](#33-quick-start)
 - [4. Bronze Datasets](#4-bronze-datasets)
-  - [4.1 Perpetual L2 Order Book (`dataset_type=perp_l2_snapshot_1m`)](#41-perpetual-l2-order-book-dataset_typeperp_l2_snapshot_1m)
+  - [4.1 Perpetual L2 Order Book (`dataset_type=perps_l2_snapshot_1m`)](#41-perpetual-l2-order-book-dataset_typeperps_l2_snapshot_1m)
   - [4.2 Options Summary (`dataset_type=options_ticker_snapshot_1m`)](#42-options-summary-dataset_typeoptions_ticker_snapshot_1m)
   - [4.3 Option Instrument Ticker (`dataset_type=option_instrument_ticker_snapshot_1m`)](#43-option-instrument-ticker-dataset_typeoption_instrument_ticker_snapshot_1m)
   - [4.4 Option L2 Order Book (`dataset_type=options_l2_snapshot_1m`)](#44-option-l2-order-book-dataset_typeoptions_l2_snapshot_1m)
@@ -98,7 +98,7 @@ Perpetual Order Book:
 
 | CLI Command | Bronze `dataset_type` | Instrument Type | Default Symbols | Source Endpoint | Description |
 |---|---|---|---|---|---|
-| `perp-l2-bronze-builder` | `perp_l2_snapshot_1m` | `perp` | `BTC ETH SOL` | `public/get_order_book` | Raw perpetual order-book snapshots |
+| `perp-l2-bronze-builder` | `perps_l2_snapshot_1m` | `perp` | `BTC ETH SOL` | `public/get_order_book` | Raw perpetual order-book snapshots |
 
 Options:
 
@@ -255,16 +255,16 @@ All datasets are Bronze raw snapshots. Shared metadata columns include source id
 `run_id`, ingestion timestamps, dataset type, exchange, and schema version. Dataset-specific
 timestamps are preserved as the natural event or snapshot time.
 
-## 4.1 Perpetual L2 Order Book (`dataset_type=perp_l2_snapshot_1m`)
+## 4.1 Perpetual L2 Order Book (`dataset_type=perps_l2_snapshot_1m`)
 
 ### 1. Bronze Layer
 
 Market role: raw perpetual order-book depth for spread, imbalance, microstructure, and realized
 volatility context.
 
-Canonical dataset name: `perp_l2_snapshot_1m`. Historical Bronze directories named
+Canonical dataset name: `perps_l2_snapshot_1m`. Historical Bronze directories named
 `dataset_type=l2_snapshot` or `dataset_type=perp_l2_snapshot` are deprecated and must be migrated
-into `dataset_type=perp_l2_snapshot_1m` before downstream reads.
+into `dataset_type=perps_l2_snapshot_1m` before downstream reads.
 
 Endpoint: `GET /api/v2/public/get_order_book`
 
@@ -644,7 +644,7 @@ Bronze root:
 
 ```text
 lake/bronze/
-  dataset_type=perp_l2_snapshot_1m/
+  dataset_type=perps_l2_snapshot_1m/
     exchange=<exchange>/instrument_type=perp/symbol=<symbol>/depth=<depth>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
   dataset_type=options_ticker_snapshot_1m/
     exchange=<exchange>/instrument_type=option/currency=<currency>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
@@ -669,7 +669,7 @@ lake/bronze/
 Partitioning uses explicit `year=YYYY/month=MM/date=DD/hour=HH` directories. Writers upsert into one
 `data.parquet` file per partition.
 
-Perpetual L2 readers and jobs should only use `dataset_type=perp_l2_snapshot_1m`. Legacy
+Perpetual L2 readers and jobs should only use `dataset_type=perps_l2_snapshot_1m`. Legacy
 `dataset_type=l2_snapshot` and `dataset_type=perp_l2_snapshot` paths are historical aliases, not
 valid active Bronze roots.
 
@@ -800,7 +800,7 @@ Upsert-based datasets merge by natural keys and deterministic sort order:
 
 | Dataset | Natural Key |
 |---|---|
-| `perp_l2_snapshot_1m` | `exchange`, `instrument_type`, `symbol`, `depth`, `source`, `event_time` |
+| `perps_l2_snapshot_1m` | `exchange`, `instrument_type`, `symbol`, `depth`, `source`, `event_time` |
 | `options_ticker_snapshot_1m` | `exchange`, `currency`, `instrument_name`, `source`, `snapshot_time` |
 | `option_instrument_ticker_snapshot_1m` | `exchange`, `instrument_name`, `source`, `snapshot_time` |
 | `options_l2_snapshot_1m` | `exchange`, `instrument_name`, `source`, `depth`, `exchange_timestamp` |
@@ -814,8 +814,19 @@ Upsert-based datasets merge by natural keys and deterministic sort order:
 ## 8.2 Observability and Logging
 
 - Every CLI command accepts `--debug`.
-- Log files are module-scoped under the configured `.logs` directory.
+- Dataset commands write to dataset-named log files under the configured `.logs` directory.
 - Runtime logs use one formatter: `timestamp level module_scope logger message`.
+- Current dataset log files:
+  - `perps_l2_snapshot_1m.log`
+  - `options_ticker_snapshot_1m.log`
+  - `option_instrument_ticker_snapshot_1m.log`
+  - `options_l2_snapshot_1m.log`
+  - `instrument_metadata_snapshot_daily.log`
+  - `future_instrument_metadata_snapshot_daily.log`
+  - `index_price_snapshot_1m.log`
+  - `volatility_index_snapshot_1m.log`
+  - `futures_summary_snapshot_1m.log`
+  - `recent_trade_snapshot_1m.log`
 - Dataset lifecycle messages use a stable key-value envelope with `dataset_type` and `exchange`
   on every dataset event:
   - `job_event command=<command> event=dispatch ...`

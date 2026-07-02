@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from logging.handlers import TimedRotatingFileHandler
 
-from api.logging_common import ModuleScopeFilter, unified_formatter
+from api.logging_common import ModuleScopeFilter, log_file_stem_for_module_name, unified_formatter
 from ingestion.config import Config, config_int, config_section, configured_log_dir, load_config
 
 LOGGER_NAME = "crypto_live_loader"
@@ -25,6 +25,7 @@ def configure_logging(module_name: str = "crypto-live-loader", config: Config | 
     """Configure runtime logging with rotation to one file per module."""
 
     safe_module_name = _safe_log_module_name(module_name)
+    safe_logfile_stem = _safe_log_module_name(log_file_stem_for_module_name(module_name))
     logger = logging.getLogger(f"{LOGGER_NAME}.{safe_module_name}")
     if logger.handlers:
         return logger
@@ -36,7 +37,7 @@ def configure_logging(module_name: str = "crypto-live-loader", config: Config | 
     resolved_config = config or load_config()
     runtime_config = config_section(resolved_config, "runtime")
     log_dir = configured_log_dir(resolved_config)
-    logfile = log_dir / f"{safe_module_name}.log"
+    logfile = log_dir / f"{safe_logfile_stem}.log"
     rotation_days = max(1, config_int(runtime_config, "log_rotation_days", DEFAULT_LOG_ROTATION_DAYS))
     backup_count = max(0, config_int(runtime_config, "log_backup_count", DEFAULT_LOG_BACKUP_COUNT))
     try:

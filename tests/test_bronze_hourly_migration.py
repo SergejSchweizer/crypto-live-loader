@@ -16,7 +16,7 @@ def test_migrate_bronze_hourly_layout_splits_daily_l2_file(tmp_path: Path) -> No
 
     source_file = (
         tmp_path
-        / "dataset_type=perp_l2_snapshot_1m"
+        / "dataset_type=perps_l2_snapshot_1m"
         / "exchange=deribit"
         / "instrument_type=perp"
         / "symbol=BTC-PERPETUAL"
@@ -51,7 +51,7 @@ def test_migrate_bronze_hourly_layout_splits_daily_l2_file(tmp_path: Path) -> No
 def _l2_row(event_time: datetime) -> dict[str, object]:
     return {
         "schema_version": "v1",
-        "dataset_type": "perp_l2_snapshot_1m",
+        "dataset_type": "perps_l2_snapshot_1m",
         "exchange": "deribit",
         "symbol": "BTC-PERPETUAL",
         "instrument_type": "perp",

@@ -7,12 +7,12 @@ from pathlib import Path
 
 from ingestion.l2 import L2Snapshot
 from ingestion.lake import (
-    save_perp_l2_snapshot_1m_parquet_lake,
+    save_perps_l2_snapshot_1m_parquet_lake,
     snapshot_partition_path,
 )
 
 
-def _sample_perp_l2_snapshot_1m(second: int, day: int = 5) -> L2Snapshot:
+def _sample_perps_l2_snapshot_1m(second: int, day: int = 5) -> L2Snapshot:
     """Build a representative raw L2 snapshot for persistence tests."""
 
     return L2Snapshot(
@@ -30,7 +30,7 @@ def _sample_perp_l2_snapshot_1m(second: int, day: int = 5) -> L2Snapshot:
     )
 
 
-def test_perp_l2_snapshot_1m_partition_path() -> None:
+def test_perps_l2_snapshot_1m_partition_path() -> None:
     """Verify raw L2 snapshot paths use the bronze layout."""
 
     result = snapshot_partition_path(
@@ -39,18 +39,18 @@ def test_perp_l2_snapshot_1m_partition_path() -> None:
     )
 
     assert str(result).endswith(
-        "dataset_type=perp_l2_snapshot_1m/exchange=deribit/instrument_type=perp/"
+        "dataset_type=perps_l2_snapshot_1m/exchange=deribit/instrument_type=perp/"
         "symbol=BTC-PERPETUAL/depth=50/source=rest_order_book/year=2026/month=05/date=05/hour=10"
     )
 
 
-def test_save_perp_l2_snapshot_1m_parquet_lake_uses_hourly_bronze_layout(tmp_path: Path) -> None:
+def test_save_perps_l2_snapshot_1m_parquet_lake_uses_hourly_bronze_layout(tmp_path: Path) -> None:
     """Verify raw L2 snapshots are written to hourly bronze partitions."""
 
-    snapshot_1 = _sample_perp_l2_snapshot_1m(second=1)
-    snapshot_2 = _sample_perp_l2_snapshot_1m(second=2, day=6)
+    snapshot_1 = _sample_perps_l2_snapshot_1m(second=1)
+    snapshot_2 = _sample_perps_l2_snapshot_1m(second=2, day=6)
 
-    files = save_perp_l2_snapshot_1m_parquet_lake(
+    files = save_perps_l2_snapshot_1m_parquet_lake(
         {"BTC": [snapshot_1, snapshot_2]},
         lake_root=str(tmp_path),
         depth=50,
@@ -58,28 +58,28 @@ def test_save_perp_l2_snapshot_1m_parquet_lake_uses_hourly_bronze_layout(tmp_pat
 
     assert len(files) == 2
     assert any(
-        "/dataset_type=perp_l2_snapshot_1m/exchange=deribit/instrument_type=perp/"
+        "/dataset_type=perps_l2_snapshot_1m/exchange=deribit/instrument_type=perp/"
         "symbol=BTC-PERPETUAL/depth=50/source=rest_order_book/year=2026/month=05/"
         "date=05/hour=10/data.parquet" in file_path
         for file_path in files
     )
     assert any(
-        "/dataset_type=perp_l2_snapshot_1m/exchange=deribit/instrument_type=perp/"
+        "/dataset_type=perps_l2_snapshot_1m/exchange=deribit/instrument_type=perp/"
         "symbol=BTC-PERPETUAL/depth=50/source=rest_order_book/year=2026/month=05/"
         "date=06/hour=10/data.parquet" in file_path
         for file_path in files
     )
 
 
-def test_save_perp_l2_snapshot_1m_parquet_lake_keeps_same_day_snapshots_as_rows(tmp_path: Path) -> None:
+def test_save_perps_l2_snapshot_1m_parquet_lake_keeps_same_day_snapshots_as_rows(tmp_path: Path) -> None:
     """Verify same-day raw snapshots are stored as distinct rows without aggregation."""
 
     import pyarrow.parquet as pq
 
-    snapshot_1 = _sample_perp_l2_snapshot_1m(second=1)
-    snapshot_2 = _sample_perp_l2_snapshot_1m(second=11)
+    snapshot_1 = _sample_perps_l2_snapshot_1m(second=1)
+    snapshot_2 = _sample_perps_l2_snapshot_1m(second=11)
 
-    files = save_perp_l2_snapshot_1m_parquet_lake(
+    files = save_perps_l2_snapshot_1m_parquet_lake(
         {"BTC": [snapshot_1, snapshot_2]},
         lake_root=str(tmp_path),
         depth=50,

@@ -18,7 +18,7 @@ NaturalKeyBuilder: TypeAlias = Callable[[ParquetRecord], tuple[object, ...]]
 SortKeyBuilder: TypeAlias = Callable[[ParquetRecord], SortableValue]
 
 BRONZE_DATASET_TIMESTAMP_COLUMNS: dict[str, str | None] = {
-    "perp_l2_snapshot_1m": "event_time",
+    "perps_l2_snapshot_1m": "event_time",
     "options_ticker_snapshot_1m": "snapshot_time",
     "options_l2_snapshot_1m": "snapshot_time",
     "instrument_metadata_snapshot_daily": None,
@@ -181,7 +181,7 @@ def _migration_staging_dir(source_file: Path) -> Path:
 
 
 def _natural_key_builder(dataset_type: str) -> NaturalKeyBuilder:
-    if dataset_type == "perp_l2_snapshot_1m":
+    if dataset_type == "perps_l2_snapshot_1m":
         return lambda row: (
             row["exchange"],
             row["instrument_type"],
@@ -214,7 +214,7 @@ def _natural_key_builder(dataset_type: str) -> NaturalKeyBuilder:
 
 
 def _sort_key_builder(dataset_type: str) -> SortKeyBuilder:
-    if dataset_type == "perp_l2_snapshot_1m":
+    if dataset_type == "perps_l2_snapshot_1m":
         return lambda row: _datetime_sort_key(row, "event_time")
     if dataset_type == "options_ticker_snapshot_1m":
         return lambda row: (

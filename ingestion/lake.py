@@ -10,8 +10,8 @@ from typing import cast
 
 from ingestion.l2 import (
     L2Snapshot,
-    perp_l2_snapshot_1m_partition_key,
-    perp_l2_snapshot_1m_record,
+    perps_l2_snapshot_1m_partition_key,
+    perps_l2_snapshot_1m_record,
 )
 from ingestion.parquet_repository import ParquetUpsertRepository
 
@@ -41,7 +41,7 @@ def snapshot_partition_path(lake_root: str, key: SnapshotPartitionKey) -> Path:
     ) = key
     return (
         Path(lake_root)
-        / "dataset_type=perp_l2_snapshot_1m"
+        / "dataset_type=perps_l2_snapshot_1m"
         / f"exchange={exchange}"
         / f"instrument_type={instrument_type}"
         / f"symbol={symbol}"
@@ -70,7 +70,7 @@ def snapshot_record_natural_key(record: dict[str, object]) -> SnapshotNaturalKey
     )
 
 
-def save_perp_l2_snapshot_1m_parquet_lake(
+def save_perps_l2_snapshot_1m_parquet_lake(
     snapshots_by_symbol: dict[str, list[L2Snapshot]],
     lake_root: str,
     depth: int,
@@ -85,9 +85,9 @@ def save_perp_l2_snapshot_1m_parquet_lake(
     grouped: defaultdict[SnapshotPartitionKey, list[dict[str, object]]] = defaultdict(list)
     for snapshots in snapshots_by_symbol.values():
         for snapshot in snapshots:
-            key = perp_l2_snapshot_1m_partition_key(snapshot=snapshot, depth=depth, source=source)
+            key = perps_l2_snapshot_1m_partition_key(snapshot=snapshot, depth=depth, source=source)
             grouped[key].append(
-                perp_l2_snapshot_1m_record(
+                perps_l2_snapshot_1m_record(
                     snapshot=snapshot,
                     depth=depth,
                     run_id=run_id,
