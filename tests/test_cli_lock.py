@@ -334,7 +334,7 @@ def test_persist_bronze_snapshots_reports_parquet_errors(monkeypatch: pytest.Mon
     def raise_parquet_error(**_: object) -> list[str]:
         raise RuntimeError("disk full")
 
-    monkeypatch.setattr(cli, "save_l2_snapshot_parquet_lake", raise_parquet_error)
+    monkeypatch.setattr(cli, "save_perp_l2_snapshot_1m_parquet_lake", raise_parquet_error)
     output: dict[str, object] = {}
 
     files, error = cli._persist_bronze_snapshots(
@@ -510,7 +510,7 @@ def test_main_loader_l2_outputs_raw_snapshots(
         current_funding=0.00001,
     )
 
-    monkeypatch.setattr(cli, "fetch_l2_snapshots_for_symbols", lambda **kwargs: {"BTC": [snapshot]})
+    monkeypatch.setattr(cli, "fetch_perp_l2_snapshot_1m_for_symbols", lambda **kwargs: {"BTC": [snapshot]})
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -554,12 +554,12 @@ def test_main_loader_l2_persists_raw_snapshots_to_lake(
     )
     calls: list[dict[str, object]] = []
 
-    def fake_save_l2_snapshot_parquet_lake(**kwargs: object) -> list[str]:
+    def fake_save_perp_l2_snapshot_1m_parquet_lake(**kwargs: object) -> list[str]:
         calls.append(kwargs)
-        return ["/tmp/lake/bronze/dataset_type=l2_snapshot/data.parquet"]
+        return ["/tmp/lake/bronze/dataset_type=perp_l2_snapshot_1m/data.parquet"]
 
-    monkeypatch.setattr(cli, "fetch_l2_snapshots_for_symbols", lambda **kwargs: {"BTC": [snapshot]})
-    monkeypatch.setattr(cli, "save_l2_snapshot_parquet_lake", fake_save_l2_snapshot_parquet_lake)
+    monkeypatch.setattr(cli, "fetch_perp_l2_snapshot_1m_for_symbols", lambda **kwargs: {"BTC": [snapshot]})
+    monkeypatch.setattr(cli, "save_perp_l2_snapshot_1m_parquet_lake", fake_save_perp_l2_snapshot_1m_parquet_lake)
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -580,6 +580,6 @@ def test_main_loader_l2_persists_raw_snapshots_to_lake(
     cli.main()
 
     output = json.loads(capsys.readouterr().out)
-    assert output["_parquet_files"] == ["/tmp/lake/bronze/dataset_type=l2_snapshot/data.parquet"]
+    assert output["_parquet_files"] == ["/tmp/lake/bronze/dataset_type=perp_l2_snapshot_1m/data.parquet"]
     assert calls[0]["snapshots_by_symbol"] == {"BTC": [snapshot]}
     assert calls[0]["depth"] == 50

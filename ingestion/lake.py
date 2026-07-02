@@ -1,4 +1,4 @@
-"""Parquet lake writer for raw L2 snapshots."""
+"""Parquet lake writer for raw perpetual L2 snapshots."""
 
 from __future__ import annotations
 
@@ -10,8 +10,8 @@ from typing import cast
 
 from ingestion.l2 import (
     L2Snapshot,
-    l2_snapshot_partition_key,
-    l2_snapshot_record,
+    perp_l2_snapshot_1m_partition_key,
+    perp_l2_snapshot_1m_record,
 )
 from ingestion.parquet_repository import ParquetUpsertRepository
 
@@ -26,7 +26,7 @@ def utc_run_id() -> str:
 
 
 def snapshot_partition_path(lake_root: str, key: SnapshotPartitionKey) -> Path:
-    """Return the bronze destination directory for one raw L2 snapshot partition."""
+    """Return the Bronze destination directory for one perpetual L2 snapshot partition."""
 
     (
         exchange,
@@ -41,7 +41,7 @@ def snapshot_partition_path(lake_root: str, key: SnapshotPartitionKey) -> Path:
     ) = key
     return (
         Path(lake_root)
-        / "dataset_type=l2_snapshot"
+        / "dataset_type=perp_l2_snapshot_1m"
         / f"exchange={exchange}"
         / f"instrument_type={instrument_type}"
         / f"symbol={symbol}"
@@ -55,7 +55,7 @@ def snapshot_partition_path(lake_root: str, key: SnapshotPartitionKey) -> Path:
 
 
 def snapshot_record_natural_key(record: dict[str, object]) -> SnapshotNaturalKey:
-    """Build the idempotent natural key for one raw L2 snapshot row."""
+    """Build the idempotent natural key for one perpetual L2 snapshot row."""
 
     event_time = record["event_time"]
     if not isinstance(event_time, datetime):
@@ -70,13 +70,13 @@ def snapshot_record_natural_key(record: dict[str, object]) -> SnapshotNaturalKey
     )
 
 
-def save_l2_snapshot_parquet_lake(
+def save_perp_l2_snapshot_1m_parquet_lake(
     snapshots_by_symbol: dict[str, list[L2Snapshot]],
     lake_root: str,
     depth: int,
     source: str = "rest_order_book",
 ) -> list[str]:
-    """Save raw L2 snapshots to hourly bronze parquet lake partitions."""
+    """Save raw perpetual L2 snapshots to hourly Bronze parquet lake partitions."""
 
     run_id = utc_run_id()
     ingested_at = datetime.now(UTC)
@@ -85,9 +85,9 @@ def save_l2_snapshot_parquet_lake(
     grouped: defaultdict[SnapshotPartitionKey, list[dict[str, object]]] = defaultdict(list)
     for snapshots in snapshots_by_symbol.values():
         for snapshot in snapshots:
-            key = l2_snapshot_partition_key(snapshot=snapshot, depth=depth, source=source)
+            key = perp_l2_snapshot_1m_partition_key(snapshot=snapshot, depth=depth, source=source)
             grouped[key].append(
-                l2_snapshot_record(
+                perp_l2_snapshot_1m_record(
                     snapshot=snapshot,
                     depth=depth,
                     run_id=run_id,

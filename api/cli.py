@@ -17,6 +17,7 @@ from api.constants import (
     INDEX_PRICE_BRONZE_BUILDER_COMMAND,
     INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
     LEGACY_BRONZE_BUILDER_COMMAND,
+    LEGACY_L2_BRONZE_BUILDER_COMMAND,
     OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
     OPTION_L2_BRONZE_BUILDER_COMMAND,
     OPTIONS_BRONZE_BUILDER_COMMAND,
@@ -77,8 +78,8 @@ from ingestion.instrument_metadata import (
     utc_run_id as instrument_utc_run_id,
 )
 from ingestion.instrument_metadata_lake import save_instrument_metadata_snapshot_parquet_lake
-from ingestion.l2 import L2Snapshot, fetch_l2_snapshots_for_symbols
-from ingestion.lake import save_l2_snapshot_parquet_lake
+from ingestion.l2 import L2Snapshot, fetch_perp_l2_snapshot_1m_for_symbols
+from ingestion.lake import save_perp_l2_snapshot_1m_parquet_lake
 from ingestion.option_instrument_ticker import (
     OPTION_INSTRUMENT_TICKER_DATASET_TYPE,
     OPTION_INSTRUMENT_TICKER_SCHEMA_VERSION,
@@ -225,8 +226,8 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
 
     l2_parser = subparsers.add_parser(
         BRONZE_BUILDER_COMMAND,
-        aliases=[LEGACY_BRONZE_BUILDER_COMMAND],
-        help="Fetch Deribit L2 snapshots and persist raw rows to the bronze parquet lake",
+        aliases=[LEGACY_L2_BRONZE_BUILDER_COMMAND, LEGACY_BRONZE_BUILDER_COMMAND],
+        help="Fetch Deribit perpetual L2 snapshots and persist raw rows to the bronze parquet lake",
     )
     l2_parser.add_argument(
         "--exchange",
@@ -273,7 +274,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         "--save-parquet-lake",
         action=argparse.BooleanOptionalAction,
         default=config_bool(ingestion_config, "save_parquet_lake", False),
-        help="Save raw L2 snapshots to bronze parquet lake partitions",
+        help="Save raw perpetual L2 snapshots to bronze parquet lake partitions",
     )
     l2_parser.add_argument(
         "--json-output",
@@ -773,7 +774,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
     return parser
 
 
-def _serialize_l2_snapshot(item: L2Snapshot) -> dict[str, object]:
+def _serialize_perp_l2_snapshot_1m(item: L2Snapshot) -> dict[str, object]:
     """Convert an L2 snapshot into a JSON-safe output dictionary."""
 
     data = asdict(item)
@@ -1030,7 +1031,7 @@ def _log_bronze_builder_summary(
         logging.INFO,
         BRONZE_BUILDER_COMMAND,
         "run_summary",
-        dataset_type="l2_snapshot",
+        dataset_type="perp_l2_snapshot_1m",
         elapsed_s=elapsed_s,
         errors=1 if parquet_error is not None else 0,
         exchange=exchange,
@@ -1064,13 +1065,13 @@ def _build_snapshot_output(
             collected_snapshots=len(snapshots),
             requested_snapshots=requested_snapshots,
         )
-        exchange_output[symbol_key] = [_serialize_l2_snapshot(item) for item in snapshots]
+        exchange_output[symbol_key] = [_serialize_perp_l2_snapshot_1m(item) for item in snapshots]
         _log_dataset_event(
             logger,
             logging.INFO,
             BRONZE_BUILDER_COMMAND,
             "snapshot_stats",
-            dataset_type="l2_snapshot",
+            dataset_type="perp_l2_snapshot_1m",
             exchange=exchange,
             snapshots_collected=len(snapshots),
             snapshots_requested=requested_snapshots,
@@ -1112,7 +1113,7 @@ def _persist_bronze_snapshots(
         return [], None
 
     try:
-        parquet_files = save_l2_snapshot_parquet_lake(
+        parquet_files = save_perp_l2_snapshot_1m_parquet_lake(
             snapshots_by_symbol=snapshots_by_symbol,
             lake_root=lake_root,
             depth=depth,
@@ -1166,7 +1167,7 @@ def _run_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config
         logger,
         BRONZE_BUILDER_COMMAND,
         "run_start",
-        dataset_type="l2_snapshot",
+        dataset_type="perp_l2_snapshot_1m",
         exchange=exchange,
         depth=int(args.levels),
         lake_root=cast(str, args.lake_root),
@@ -1182,7 +1183,7 @@ def _run_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config
         poll_interval_s=float(args.poll_interval_s),
         max_runtime_s=max_runtime_s,
     )
-    snapshots_by_symbol = fetch_l2_snapshots_for_symbols(
+    snapshots_by_symbol = fetch_perp_l2_snapshot_1m_for_symbols(
         exchange=exchange,
         symbols=symbols,
         depth=int(args.levels),
@@ -1194,7 +1195,7 @@ def _run_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config
         logger,
         BRONZE_BUILDER_COMMAND,
         "collection_complete",
-        dataset_type="l2_snapshot",
+        dataset_type="perp_l2_snapshot_1m",
         exchange=exchange,
         snapshots_collected=sum(len(snapshots) for snapshots in snapshots_by_symbol.values()),
         snapshots_by_symbol={symbol: len(snapshots_by_symbol.get(symbol, [])) for symbol in symbols},
@@ -1220,7 +1221,7 @@ def _run_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config
         logger,
         BRONZE_BUILDER_COMMAND,
         "persistence_complete",
-        dataset_type="l2_snapshot",
+        dataset_type="perp_l2_snapshot_1m",
         exchange=exchange,
         files=len(parquet_files),
         output_files=parquet_files,
@@ -2448,6 +2449,8 @@ def command_handlers() -> dict[str, CommandHandler]:
 
     return {
         BRONZE_BUILDER_COMMAND: _handle_bronze_builder,
+        LEGACY_L2_BRONZE_BUILDER_COMMAND: _handle_bronze_builder,
+        LEGACY_BRONZE_BUILDER_COMMAND: _handle_bronze_builder,
         OPTIONS_BRONZE_BUILDER_COMMAND: _handle_options_bronze_builder,
         FUTURES_SUMMARY_BRONZE_BUILDER_COMMAND: _handle_futures_summary_bronze_builder,
         OPTION_L2_BRONZE_BUILDER_COMMAND: _handle_option_l2_bronze_builder,

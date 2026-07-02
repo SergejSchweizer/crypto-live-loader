@@ -10,6 +10,7 @@ COMMAND_LOG_SCOPES = {
     "futures-summary-bronze-builder": "futures_summary",
     "index-price-bronze-builder": "index_price",
     "instrument-metadata-bronze-builder": "instrument_metadata",
+    "perp-l2-bronze-builder": "l2",
     "l2-bronze-builder": "l2",
     "bronze-builder": "l2",
     "option-l2-bronze-builder": "option_l2",
