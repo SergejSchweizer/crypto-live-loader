@@ -24,7 +24,7 @@ from api.constants import (
     VALIDATE_SYMBOLS_COMMAND,
     VOLATILITY_INDEX_BRONZE_BUILDER_COMMAND,
 )
-from api.logging_common import COMMAND_LOG_SCOPES, ModuleScopeFilter
+from api.logging_common import COMMAND_LOG_SCOPES, ModuleScopeFilter, log_file_stem_for_module_name
 from api.runtime import configure_logging
 from domain.models import OrderLevel, RawSnapshot
 from ingestion.config import Config
@@ -115,6 +115,32 @@ def test_configure_logging_uses_module_specific_logfile(tmp_path: Path) -> None:
         for handler in list(logger.handlers):
             handler.close()
             logger.removeHandler(handler)
+
+
+def test_configure_logging_uses_dataset_logfile_for_commands(tmp_path: Path) -> None:
+    """Verify command loggers write to dataset-named logfiles."""
+
+    log_dir = tmp_path / "logs"
+
+    logger = configure_logging(
+        module_name=BRONZE_BUILDER_COMMAND,
+        config=_config(log_dir=str(log_dir)),
+    )
+    try:
+        file_handler = next(handler for handler in logger.handlers if isinstance(handler, TimedRotatingFileHandler))
+        assert Path(file_handler.baseFilename) == log_dir / "perps_l2_snapshot_1m.log"
+    finally:
+        for handler in list(logger.handlers):
+            handler.close()
+            logger.removeHandler(handler)
+
+
+def test_log_module_name_for_future_instrument_metadata_uses_dataset() -> None:
+    """Verify future metadata writes to the future metadata dataset log."""
+
+    args = cli.build_parser().parse_args([INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND, "--kind", "future"])
+
+    assert cli._log_module_name_for_args(args) == "future_instrument_metadata_snapshot_daily"
 
 
 def test_l2_parser_defaults_can_come_from_config() -> None:
@@ -253,6 +279,7 @@ def test_module_scope_filter_maps_every_dataset_command() -> None:
         )
         assert scope_filter.filter(record)
         assert record.__dict__["module_scope"] == expected_scope
+        assert log_file_stem_for_module_name(command) == expected_scope
 
 
 def test_cron_layer_commands_accept_debug_flag() -> None:
@@ -336,7 +363,7 @@ def test_persist_bronze_snapshots_reports_parquet_errors(monkeypatch: pytest.Mon
     def raise_parquet_error(**_: object) -> list[str]:
         raise RuntimeError("disk full")
 
-    monkeypatch.setattr(cli, "save_perp_l2_snapshot_1m_parquet_lake", raise_parquet_error)
+    monkeypatch.setattr(cli, "save_perps_l2_snapshot_1m_parquet_lake", raise_parquet_error)
     output: dict[str, object] = {}
 
     files, error = cli._persist_bronze_snapshots(
@@ -512,7 +539,7 @@ def test_main_loader_l2_outputs_raw_snapshots(
         current_funding=0.00001,
     )
 
-    monkeypatch.setattr(cli, "fetch_perp_l2_snapshot_1m_for_symbols", lambda **kwargs: {"BTC": [snapshot]})
+    monkeypatch.setattr(cli, "fetch_perps_l2_snapshot_1m_for_symbols", lambda **kwargs: {"BTC": [snapshot]})
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -556,12 +583,12 @@ def test_main_loader_l2_persists_raw_snapshots_to_lake(
     )
     calls: list[dict[str, object]] = []
 
-    def fake_save_perp_l2_snapshot_1m_parquet_lake(**kwargs: object) -> list[str]:
+    def fake_save_perps_l2_snapshot_1m_parquet_lake(**kwargs: object) -> list[str]:
         calls.append(kwargs)
-        return ["/tmp/lake/bronze/dataset_type=perp_l2_snapshot_1m/data.parquet"]
+        return ["/tmp/lake/bronze/dataset_type=perps_l2_snapshot_1m/data.parquet"]
 
-    monkeypatch.setattr(cli, "fetch_perp_l2_snapshot_1m_for_symbols", lambda **kwargs: {"BTC": [snapshot]})
-    monkeypatch.setattr(cli, "save_perp_l2_snapshot_1m_parquet_lake", fake_save_perp_l2_snapshot_1m_parquet_lake)
+    monkeypatch.setattr(cli, "fetch_perps_l2_snapshot_1m_for_symbols", lambda **kwargs: {"BTC": [snapshot]})
+    monkeypatch.setattr(cli, "save_perps_l2_snapshot_1m_parquet_lake", fake_save_perps_l2_snapshot_1m_parquet_lake)
     monkeypatch.setattr(
         "sys.argv",
         [
@@ -582,6 +609,6 @@ def test_main_loader_l2_persists_raw_snapshots_to_lake(
     cli.main()
 
     output = json.loads(capsys.readouterr().out)
-    assert output["_parquet_files"] == ["/tmp/lake/bronze/dataset_type=perp_l2_snapshot_1m/data.parquet"]
+    assert output["_parquet_files"] == ["/tmp/lake/bronze/dataset_type=perps_l2_snapshot_1m/data.parquet"]
     assert calls[0]["snapshots_by_symbol"] == {"BTC": [snapshot]}
     assert calls[0]["depth"] == 50

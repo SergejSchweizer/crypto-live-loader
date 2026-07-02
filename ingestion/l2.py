@@ -14,6 +14,8 @@ from sources.registry import source_adapter_for_exchange
 
 LOGGER = logging.getLogger(__name__)
 
+PERPS_L2_DATASET_TYPE = "perps_l2_snapshot_1m"
+
 
 @dataclass(frozen=True)
 class L2FetchConfig:
@@ -80,7 +82,7 @@ class L2Snapshot:
     current_funding: float | None
 
 
-def fetch_perp_l2_snapshot_1m_for_symbols(
+def fetch_perps_l2_snapshot_1m_for_symbols(
     exchange: str,
     symbols: list[str],
     depth: int,
@@ -103,7 +105,7 @@ def fetch_perp_l2_snapshot_1m_for_symbols(
         adapter=adapter,
     )
     return asyncio.run(
-        fetch_perp_l2_snapshot_1m_for_symbols_async(
+        fetch_perps_l2_snapshot_1m_for_symbols_async(
             exchange=config.exchange,
             symbols=config.symbols,
             depth=config.depth,
@@ -116,7 +118,7 @@ def fetch_perp_l2_snapshot_1m_for_symbols(
     )
 
 
-async def fetch_perp_l2_snapshot_1m_for_symbols_async(
+async def fetch_perps_l2_snapshot_1m_for_symbols_async(
     exchange: str,
     symbols: list[str],
     depth: int,
@@ -281,7 +283,7 @@ def _snapshot_from_raw(raw: RawSnapshot, fetch_duration_s: float = 0.0) -> L2Sna
     )
 
 
-def perp_l2_snapshot_1m_record(
+def perps_l2_snapshot_1m_record(
     snapshot: L2Snapshot,
     depth: int,
     run_id: str,
@@ -292,7 +294,7 @@ def perp_l2_snapshot_1m_record(
 
     return {
         "schema_version": "v1",
-        "dataset_type": "perp_l2_snapshot_1m",
+        "dataset_type": PERPS_L2_DATASET_TYPE,
         "exchange": snapshot.exchange,
         "symbol": snapshot.symbol,
         "instrument_type": "perp",
@@ -312,7 +314,7 @@ def perp_l2_snapshot_1m_record(
     }
 
 
-def perp_l2_snapshot_1m_partition_key(
+def perps_l2_snapshot_1m_partition_key(
     snapshot: L2Snapshot,
     depth: int,
     source: str,

@@ -79,8 +79,8 @@ from ingestion.instrument_metadata import (
     utc_run_id as instrument_utc_run_id,
 )
 from ingestion.instrument_metadata_lake import save_instrument_metadata_snapshot_parquet_lake
-from ingestion.l2 import L2Snapshot, fetch_perp_l2_snapshot_1m_for_symbols
-from ingestion.lake import save_perp_l2_snapshot_1m_parquet_lake
+from ingestion.l2 import L2Snapshot, fetch_perps_l2_snapshot_1m_for_symbols
+from ingestion.lake import save_perps_l2_snapshot_1m_parquet_lake
 from ingestion.option_instrument_ticker import (
     OPTION_INSTRUMENT_TICKER_DATASET_TYPE,
     OPTION_INSTRUMENT_TICKER_SCHEMA_VERSION,
@@ -710,7 +710,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
     return parser
 
 
-def _serialize_perp_l2_snapshot_1m(item: L2Snapshot) -> dict[str, object]:
+def _serialize_perps_l2_snapshot_1m(item: L2Snapshot) -> dict[str, object]:
     """Convert an L2 snapshot into a JSON-safe output dictionary."""
 
     data = asdict(item)
@@ -967,7 +967,7 @@ def _log_bronze_builder_summary(
         logging.INFO,
         BRONZE_BUILDER_COMMAND,
         "run_summary",
-        dataset_type="perp_l2_snapshot_1m",
+        dataset_type="perps_l2_snapshot_1m",
         elapsed_s=elapsed_s,
         errors=1 if parquet_error is not None else 0,
         exchange=exchange,
@@ -1001,13 +1001,13 @@ def _build_snapshot_output(
             collected_snapshots=len(snapshots),
             requested_snapshots=requested_snapshots,
         )
-        exchange_output[symbol_key] = [_serialize_perp_l2_snapshot_1m(item) for item in snapshots]
+        exchange_output[symbol_key] = [_serialize_perps_l2_snapshot_1m(item) for item in snapshots]
         _log_dataset_event(
             logger,
             logging.INFO,
             BRONZE_BUILDER_COMMAND,
             "snapshot_stats",
-            dataset_type="perp_l2_snapshot_1m",
+            dataset_type="perps_l2_snapshot_1m",
             exchange=exchange,
             snapshots_collected=len(snapshots),
             snapshots_requested=requested_snapshots,
@@ -1049,7 +1049,7 @@ def _persist_bronze_snapshots(
         return [], None
 
     try:
-        parquet_files = save_perp_l2_snapshot_1m_parquet_lake(
+        parquet_files = save_perps_l2_snapshot_1m_parquet_lake(
             snapshots_by_symbol=snapshots_by_symbol,
             lake_root=lake_root,
             depth=depth,
@@ -1103,7 +1103,7 @@ def _run_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config
         logger,
         BRONZE_BUILDER_COMMAND,
         "run_start",
-        dataset_type="perp_l2_snapshot_1m",
+        dataset_type="perps_l2_snapshot_1m",
         exchange=exchange,
         depth=int(args.levels),
         lake_root=cast(str, args.lake_root),
@@ -1119,7 +1119,7 @@ def _run_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config
         poll_interval_s=float(args.poll_interval_s),
         max_runtime_s=max_runtime_s,
     )
-    snapshots_by_symbol = fetch_perp_l2_snapshot_1m_for_symbols(
+    snapshots_by_symbol = fetch_perps_l2_snapshot_1m_for_symbols(
         exchange=exchange,
         symbols=symbols,
         depth=int(args.levels),
@@ -1131,7 +1131,7 @@ def _run_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config
         logger,
         BRONZE_BUILDER_COMMAND,
         "collection_complete",
-        dataset_type="perp_l2_snapshot_1m",
+        dataset_type="perps_l2_snapshot_1m",
         exchange=exchange,
         snapshots_collected=sum(len(snapshots) for snapshots in snapshots_by_symbol.values()),
         snapshots_by_symbol={symbol: len(snapshots_by_symbol.get(symbol, [])) for symbol in symbols},
@@ -1157,7 +1157,7 @@ def _run_bronze_builder(args: argparse.Namespace, logger: logging.Logger, config
         logger,
         BRONZE_BUILDER_COMMAND,
         "persistence_complete",
-        dataset_type="perp_l2_snapshot_1m",
+        dataset_type="perps_l2_snapshot_1m",
         exchange=exchange,
         files=len(parquet_files),
         output_files=parquet_files,
@@ -2419,13 +2419,22 @@ def dispatch_command(args: argparse.Namespace, logger: logging.Logger, config: C
     handler(args, logger, config)
 
 
+def _log_module_name_for_args(args: argparse.Namespace) -> str:
+    """Resolve the dataset log module name for parsed CLI arguments."""
+
+    command = str(args.command)
+    if command == INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND and getattr(args, "kind", "option") == "future":
+        return FUTURE_INSTRUMENT_METADATA_DATASET_TYPE
+    return command
+
+
 def main() -> None:
     """CLI entrypoint."""
 
     config = load_config()
     parser = build_parser(config)
     args = parser.parse_args()
-    logger = configure_logging(module_name=str(args.command), config=config)
+    logger = configure_logging(module_name=_log_module_name_for_args(args), config=config)
     dispatch_command(args=args, logger=logger, config=config)
 
 
