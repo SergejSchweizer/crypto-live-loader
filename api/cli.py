@@ -209,6 +209,57 @@ def _debug_flag(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _lake_root_flag(parser: argparse.ArgumentParser, config: Config) -> None:
+    parser.add_argument(
+        "--lake-root",
+        default=config_str(config, "lake_root", "lake/bronze"),
+        help="Root directory for parquet lake files",
+    )
+
+
+def _save_parquet_lake_flag(
+    parser: argparse.ArgumentParser,
+    config: Config,
+    *,
+    default: bool,
+    help_text: str,
+) -> None:
+    _boolean_optional_flag(
+        parser,
+        "save-parquet-lake",
+        config_bool(config, "save_parquet_lake", default),
+        help_text,
+    )
+
+
+def _source_schema_flags(
+    parser: argparse.ArgumentParser,
+    config: Config,
+    *,
+    source_default: str,
+    schema_version_default: str,
+) -> None:
+    parser.add_argument(
+        "--source",
+        default=config_str(config, "source", source_default),
+        help="Source identifier written to bronze rows",
+    )
+    parser.add_argument(
+        "--schema-version",
+        default=config_str(config, "schema_version", schema_version_default),
+        help="Schema version tag to annotate each normalized row",
+    )
+
+
+def _json_output_flag(parser: argparse.ArgumentParser, config: Config, fallback_config: Config) -> None:
+    _boolean_optional_flag(
+        parser,
+        "json-output",
+        config_bool(config, "json_output", config_bool(fallback_config, "json_output", True)),
+        "Print JSON output",
+    )
+
+
 def _enable_debug_logging(args: argparse.Namespace, logger: logging.Logger) -> None:
     if not bool(getattr(args, "debug", False)):
         return
@@ -260,29 +311,20 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         default=config_float(ingestion_config, "poll_interval_s", 10.0),
         help="Sleep interval between polling ticks",
     )
-    l2_parser.add_argument(
-        "--lake-root",
-        default=config_str(ingestion_config, "lake_root", "lake/bronze"),
-        help="Root directory for parquet lake files",
-    )
+    _lake_root_flag(l2_parser, ingestion_config)
     l2_parser.add_argument(
         "--max-runtime-s",
         type=float,
         default=config_float(ingestion_config, "max_runtime_s", 50.0),
         help="Maximum collection runtime in seconds; 0 disables the budget",
     )
-    l2_parser.add_argument(
-        "--save-parquet-lake",
-        action=argparse.BooleanOptionalAction,
-        default=config_bool(ingestion_config, "save_parquet_lake", False),
-        help="Save raw perpetual L2 snapshots to bronze parquet lake partitions",
+    _save_parquet_lake_flag(
+        l2_parser,
+        ingestion_config,
+        default=False,
+        help_text="Save raw perpetual L2 snapshots to bronze parquet lake partitions",
     )
-    l2_parser.add_argument(
-        "--json-output",
-        action=argparse.BooleanOptionalAction,
-        default=config_bool(ingestion_config, "json_output", True),
-        help="Print JSON output",
-    )
+    _json_output_flag(l2_parser, ingestion_config, ingestion_config)
     _debug_flag(l2_parser)
 
     options_config = config_section(ingestion_config, "options")
@@ -304,33 +346,20 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         type=str,
         help="Option symbols/currencies to fetch, separated by spaces or commas",
     )
-    options_parser.add_argument(
-        "--lake-root",
-        default=config_str(options_config, "lake_root", "lake/bronze"),
-        help="Root directory for parquet lake files",
-    )
+    _lake_root_flag(options_parser, options_config)
     options_parser.add_argument(
         "--save-parquet-lake",
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Save raw option ticker snapshots to bronze parquet lake partitions",
     )
-    options_parser.add_argument(
-        "--schema-version",
-        default=config_str(options_config, "schema_version", OPTION_TICKER_SCHEMA_VERSION),
-        help="Schema version tag to annotate each normalized row",
+    _source_schema_flags(
+        options_parser,
+        options_config,
+        source_default=OPTION_TICKER_SOURCE,
+        schema_version_default=OPTION_TICKER_SCHEMA_VERSION,
     )
-    options_parser.add_argument(
-        "--source",
-        default=config_str(options_config, "source", OPTION_TICKER_SOURCE),
-        help="Source identifier written to bronze rows",
-    )
-    options_parser.add_argument(
-        "--json-output",
-        action=argparse.BooleanOptionalAction,
-        default=config_bool(options_config, "json_output", config_bool(ingestion_config, "json_output", True)),
-        help="Print JSON output",
-    )
+    _json_output_flag(options_parser, options_config, ingestion_config)
     _debug_flag(options_parser)
 
     futures_summary_config = config_section(ingestion_config, "futures_summary")
@@ -352,33 +381,20 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         type=str,
         help="Futures symbols/currencies to fetch, separated by spaces or commas",
     )
-    futures_summary_parser.add_argument(
-        "--lake-root",
-        default=config_str(futures_summary_config, "lake_root", "lake/bronze"),
-        help="Root directory for parquet lake files",
-    )
-    _boolean_optional_flag(
+    _lake_root_flag(futures_summary_parser, futures_summary_config)
+    _save_parquet_lake_flag(
         futures_summary_parser,
-        "save-parquet-lake",
-        config_bool(futures_summary_config, "save_parquet_lake", True),
-        "Save raw futures summary rows to bronze parquet lake partitions",
+        futures_summary_config,
+        default=True,
+        help_text="Save raw futures summary rows to bronze parquet lake partitions",
     )
-    futures_summary_parser.add_argument(
-        "--source",
-        default=config_str(futures_summary_config, "source", FUTURES_SUMMARY_SOURCE),
-        help="Source identifier written to bronze rows",
-    )
-    futures_summary_parser.add_argument(
-        "--schema-version",
-        default=config_str(futures_summary_config, "schema_version", FUTURES_SUMMARY_SCHEMA_VERSION),
-        help="Schema version tag to annotate each normalized row",
-    )
-    _boolean_optional_flag(
+    _source_schema_flags(
         futures_summary_parser,
-        "json-output",
-        config_bool(futures_summary_config, "json_output", config_bool(ingestion_config, "json_output", True)),
-        "Print JSON output",
+        futures_summary_config,
+        source_default=FUTURES_SUMMARY_SOURCE,
+        schema_version_default=FUTURES_SUMMARY_SCHEMA_VERSION,
     )
+    _json_output_flag(futures_summary_parser, futures_summary_config, ingestion_config)
     _debug_flag(futures_summary_parser)
 
     option_l2_config = config_section(ingestion_config, "option_l2")
@@ -414,39 +430,26 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         default=config_int(option_l2_config, "depth", 20),
         help="Number of order-book levels per side to request for each option",
     )
-    option_l2_parser.add_argument(
-        "--lake-root",
-        default=config_str(option_l2_config, "lake_root", "lake/bronze"),
-        help="Root directory for parquet lake files",
-    )
+    _lake_root_flag(option_l2_parser, option_l2_config)
     option_l2_parser.add_argument(
         "--max-instruments-per-run",
         type=int,
         default=config_int(option_l2_config, "max_instruments_per_run", 60),
         help="Maximum selected option instruments to fetch sequentially per currency",
     )
-    _boolean_optional_flag(
+    _save_parquet_lake_flag(
         option_l2_parser,
-        "save-parquet-lake",
-        config_bool(option_l2_config, "save_parquet_lake", True),
-        "Save selected option order-book snapshots to bronze parquet lake partitions",
+        option_l2_config,
+        default=True,
+        help_text="Save selected option order-book snapshots to bronze parquet lake partitions",
     )
-    option_l2_parser.add_argument(
-        "--schema-version",
-        default=config_str(option_l2_config, "schema_version", OPTION_L2_SCHEMA_VERSION),
-        help="Schema version tag to annotate each normalized row",
-    )
-    option_l2_parser.add_argument(
-        "--source",
-        default=config_str(option_l2_config, "source", OPTION_L2_SOURCE),
-        help="Source identifier written to bronze rows",
-    )
-    _boolean_optional_flag(
+    _source_schema_flags(
         option_l2_parser,
-        "json-output",
-        config_bool(option_l2_config, "json_output", config_bool(ingestion_config, "json_output", True)),
-        "Print JSON output",
+        option_l2_config,
+        source_default=OPTION_L2_SOURCE,
+        schema_version_default=OPTION_L2_SCHEMA_VERSION,
     )
+    _json_output_flag(option_l2_parser, option_l2_config, ingestion_config)
     _debug_flag(option_l2_parser)
 
     option_instrument_ticker_config = config_section(ingestion_config, "option_instrument_ticker")
@@ -475,43 +478,26 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         type=str,
         help="Explicit Deribit option instruments to fetch; skips currency discovery when provided",
     )
-    option_instrument_ticker_parser.add_argument(
-        "--lake-root",
-        default=config_str(option_instrument_ticker_config, "lake_root", "lake/bronze"),
-        help="Root directory for parquet lake files",
-    )
+    _lake_root_flag(option_instrument_ticker_parser, option_instrument_ticker_config)
     option_instrument_ticker_parser.add_argument(
         "--max-instruments-per-run",
         type=int,
         default=config_int(option_instrument_ticker_config, "max_instruments_per_run", 60),
         help="Maximum selected option instruments to fetch sequentially per currency",
     )
-    _boolean_optional_flag(
+    _save_parquet_lake_flag(
         option_instrument_ticker_parser,
-        "save-parquet-lake",
-        config_bool(option_instrument_ticker_config, "save_parquet_lake", True),
-        "Save per-option ticker snapshots to bronze parquet lake partitions",
+        option_instrument_ticker_config,
+        default=True,
+        help_text="Save per-option ticker snapshots to bronze parquet lake partitions",
     )
-    option_instrument_ticker_parser.add_argument(
-        "--schema-version",
-        default=config_str(option_instrument_ticker_config, "schema_version", OPTION_INSTRUMENT_TICKER_SCHEMA_VERSION),
-        help="Schema version tag to annotate each normalized row",
-    )
-    option_instrument_ticker_parser.add_argument(
-        "--source",
-        default=config_str(option_instrument_ticker_config, "source", OPTION_INSTRUMENT_TICKER_SOURCE),
-        help="Source identifier written to bronze rows",
-    )
-    _boolean_optional_flag(
+    _source_schema_flags(
         option_instrument_ticker_parser,
-        "json-output",
-        config_bool(
-            option_instrument_ticker_config,
-            "json_output",
-            config_bool(ingestion_config, "json_output", True),
-        ),
-        "Print JSON output",
+        option_instrument_ticker_config,
+        source_default=OPTION_INSTRUMENT_TICKER_SOURCE,
+        schema_version_default=OPTION_INSTRUMENT_TICKER_SCHEMA_VERSION,
     )
+    _json_output_flag(option_instrument_ticker_parser, option_instrument_ticker_config, ingestion_config)
     _debug_flag(option_instrument_ticker_parser)
 
     instrument_metadata_config = config_section(ingestion_config, "instrument_metadata")
@@ -539,33 +525,20 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         config_bool(instrument_metadata_config, "include_inactive", False),
         "Include expired/inactive instruments from Deribit",
     )
-    instrument_metadata_parser.add_argument(
-        "--lake-root",
-        default=config_str(instrument_metadata_config, "lake_root", "lake/bronze"),
-        help="Root directory for parquet lake files",
-    )
-    _boolean_optional_flag(
+    _lake_root_flag(instrument_metadata_parser, instrument_metadata_config)
+    _save_parquet_lake_flag(
         instrument_metadata_parser,
-        "save-parquet-lake",
-        config_bool(instrument_metadata_config, "save_parquet_lake", True),
-        "Save raw instrument metadata rows to bronze parquet lake partitions",
+        instrument_metadata_config,
+        default=True,
+        help_text="Save raw instrument metadata rows to bronze parquet lake partitions",
     )
-    instrument_metadata_parser.add_argument(
-        "--schema-version",
-        default=config_str(instrument_metadata_config, "schema_version", INSTRUMENT_METADATA_SCHEMA_VERSION),
-        help="Schema version tag to annotate each normalized row",
-    )
-    instrument_metadata_parser.add_argument(
-        "--source",
-        default=config_str(instrument_metadata_config, "source", INSTRUMENT_METADATA_SOURCE),
-        help="Source identifier written to bronze rows",
-    )
-    _boolean_optional_flag(
+    _source_schema_flags(
         instrument_metadata_parser,
-        "json-output",
-        config_bool(instrument_metadata_config, "json_output", config_bool(ingestion_config, "json_output", True)),
-        "Print JSON output",
+        instrument_metadata_config,
+        source_default=INSTRUMENT_METADATA_SOURCE,
+        schema_version_default=INSTRUMENT_METADATA_SCHEMA_VERSION,
     )
+    _json_output_flag(instrument_metadata_parser, instrument_metadata_config, ingestion_config)
     _debug_flag(instrument_metadata_parser)
 
     index_price_config = config_section(ingestion_config, "index_price")
@@ -580,33 +553,20 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         type=str,
         help="Deribit index names to fetch, separated by spaces or commas",
     )
-    index_price_parser.add_argument(
-        "--lake-root",
-        default=config_str(index_price_config, "lake_root", "lake/bronze"),
-        help="Root directory for parquet lake files",
-    )
-    _boolean_optional_flag(
+    _lake_root_flag(index_price_parser, index_price_config)
+    _save_parquet_lake_flag(
         index_price_parser,
-        "save-parquet-lake",
-        config_bool(index_price_config, "save_parquet_lake", True),
-        "Save raw index price rows to bronze parquet lake partitions",
+        index_price_config,
+        default=True,
+        help_text="Save raw index price rows to bronze parquet lake partitions",
     )
-    index_price_parser.add_argument(
-        "--source",
-        default=config_str(index_price_config, "source", INDEX_PRICE_SOURCE),
-        help="Source identifier written to bronze rows",
-    )
-    index_price_parser.add_argument(
-        "--schema-version",
-        default=config_str(index_price_config, "schema_version", INDEX_PRICE_SCHEMA_VERSION),
-        help="Schema version tag to annotate each normalized row",
-    )
-    _boolean_optional_flag(
+    _source_schema_flags(
         index_price_parser,
-        "json-output",
-        config_bool(index_price_config, "json_output", config_bool(ingestion_config, "json_output", True)),
-        "Print JSON output",
+        index_price_config,
+        source_default=INDEX_PRICE_SOURCE,
+        schema_version_default=INDEX_PRICE_SCHEMA_VERSION,
     )
+    _json_output_flag(index_price_parser, index_price_config, ingestion_config)
     _debug_flag(index_price_parser)
 
     volatility_index_config = config_section(ingestion_config, "volatility_index")
@@ -635,33 +595,20 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         default=config_int(volatility_index_config, "lookback_seconds", 600),
         help="Overlap window start in seconds before the run snapshot minute",
     )
-    volatility_index_parser.add_argument(
-        "--lake-root",
-        default=config_str(volatility_index_config, "lake_root", "lake/bronze"),
-        help="Root directory for parquet lake files",
-    )
-    _boolean_optional_flag(
+    _lake_root_flag(volatility_index_parser, volatility_index_config)
+    _save_parquet_lake_flag(
         volatility_index_parser,
-        "save-parquet-lake",
-        config_bool(volatility_index_config, "save_parquet_lake", True),
-        "Save volatility-index candles to bronze parquet lake partitions",
+        volatility_index_config,
+        default=True,
+        help_text="Save volatility-index candles to bronze parquet lake partitions",
     )
-    volatility_index_parser.add_argument(
-        "--source",
-        default=config_str(volatility_index_config, "source", VOLATILITY_INDEX_SOURCE),
-        help="Source identifier written to bronze rows",
-    )
-    volatility_index_parser.add_argument(
-        "--schema-version",
-        default=config_str(volatility_index_config, "schema_version", VOLATILITY_INDEX_SCHEMA_VERSION),
-        help="Schema version tag to annotate each normalized row",
-    )
-    _boolean_optional_flag(
+    _source_schema_flags(
         volatility_index_parser,
-        "json-output",
-        config_bool(volatility_index_config, "json_output", config_bool(ingestion_config, "json_output", True)),
-        "Print JSON output",
+        volatility_index_config,
+        source_default=VOLATILITY_INDEX_SOURCE,
+        schema_version_default=VOLATILITY_INDEX_SCHEMA_VERSION,
     )
+    _json_output_flag(volatility_index_parser, volatility_index_config, ingestion_config)
     _debug_flag(volatility_index_parser)
 
     recent_trades_config = config_section(ingestion_config, "recent_trades")
@@ -714,33 +661,20 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
         default=config_str(recent_trades_config, "sorting", "asc"),
         help="Deribit trade sorting direction",
     )
-    recent_trades_parser.add_argument(
-        "--lake-root",
-        default=config_str(recent_trades_config, "lake_root", "lake/bronze"),
-        help="Root directory for parquet lake files",
-    )
-    _boolean_optional_flag(
+    _lake_root_flag(recent_trades_parser, recent_trades_config)
+    _save_parquet_lake_flag(
         recent_trades_parser,
-        "save-parquet-lake",
-        config_bool(recent_trades_config, "save_parquet_lake", True),
-        "Save raw recent trade rows to bronze parquet lake partitions",
+        recent_trades_config,
+        default=True,
+        help_text="Save raw recent trade rows to bronze parquet lake partitions",
     )
-    recent_trades_parser.add_argument(
-        "--source",
-        default=config_str(recent_trades_config, "source", RECENT_TRADE_SOURCE),
-        help="Source identifier written to bronze rows",
-    )
-    recent_trades_parser.add_argument(
-        "--schema-version",
-        default=config_str(recent_trades_config, "schema_version", RECENT_TRADE_SCHEMA_VERSION),
-        help="Schema version tag to annotate each normalized row",
-    )
-    _boolean_optional_flag(
+    _source_schema_flags(
         recent_trades_parser,
-        "json-output",
-        config_bool(recent_trades_config, "json_output", config_bool(ingestion_config, "json_output", True)),
-        "Print JSON output",
+        recent_trades_config,
+        source_default=RECENT_TRADE_SOURCE,
+        schema_version_default=RECENT_TRADE_SCHEMA_VERSION,
     )
+    _json_output_flag(recent_trades_parser, recent_trades_config, ingestion_config)
     _debug_flag(recent_trades_parser)
 
     validate_parser = subparsers.add_parser(
