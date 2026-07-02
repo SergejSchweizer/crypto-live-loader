@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import cast
 
 from ingestion.http_client import get_json
+from sources.deribit.public_api import deribit_public_result_mapping
 
 DERIBIT_VOLATILITY_INDEX_URL = "https://www.deribit.com/api/v2/public/get_volatility_index_data"
 SUPPORTED_VOLATILITY_INDEX_CURRENCIES = ("BTC", "ETH", "SOL")
@@ -32,7 +33,7 @@ def fetch_volatility_index_candles(
     """Fetch Deribit volatility-index candles for one logical currency."""
 
     source_currency = volatility_index_source_currency(currency)
-    payload = get_json(
+    result = deribit_public_result_mapping(
         DERIBIT_VOLATILITY_INDEX_URL,
         params={
             "currency": source_currency,
@@ -40,12 +41,9 @@ def fetch_volatility_index_candles(
             "end_timestamp": end_timestamp,
             "resolution": str(resolution),
         },
+        context="volatility index",
+        json_getter=get_json,
     )
-    if not isinstance(payload, dict):
-        raise ValueError("Unexpected Deribit volatility index response format")
-    result = payload.get("result")
-    if not isinstance(result, dict):
-        raise ValueError("Unexpected Deribit volatility index payload")
     data = result.get("data")
     if not isinstance(data, list):
         raise ValueError("Unexpected Deribit volatility index candle data")

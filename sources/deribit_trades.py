@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from typing import cast
 
 from ingestion.http_client import get_json
+from sources.deribit.public_api import deribit_result_from_payload
 
 DERIBIT_LAST_TRADES_BY_CURRENCY_URL = "https://www.deribit.com/api/v2/public/get_last_trades_by_currency"
 DERIBIT_LAST_TRADES_BY_INSTRUMENT_URL = "https://www.deribit.com/api/v2/public/get_last_trades_by_instrument"
@@ -136,10 +137,7 @@ def fetch_last_trades_by_instrument(
 
 
 def _trade_rows_from_payload(payload: object) -> list[dict[str, object]]:
-    if not isinstance(payload, Mapping):
-        raise ValueError("Unexpected Deribit trade response format")
-    response = cast(Mapping[str, object], payload)
-    result = response.get("result")
+    result = deribit_result_from_payload(payload, context="trade")
     if isinstance(result, list):
         return [cast(dict[str, object], row) for row in result if isinstance(row, dict)]
     if isinstance(result, Mapping):
