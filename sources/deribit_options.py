@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import cast
 
 from ingestion.http_client import get_json
+from sources.deribit.public_api import deribit_public_result_rows
 
 DERIBIT_OPTIONS_SUMMARY_URL = "https://www.deribit.com/api/v2/public/get_book_summary_by_currency"
 DERIBIT_OPTIONS_SOURCE = "public/get_book_summary_by_currency"
@@ -43,17 +43,13 @@ def resolve_options_currency_request(currency: str) -> OptionsCurrencyRequest:
 def fetch_option_book_summary_rows(request: OptionsCurrencyRequest) -> list[dict[str, object]]:
     """Fetch Deribit option summary rows for one currency request."""
 
-    payload = get_json(
+    rows = deribit_public_result_rows(
         DERIBIT_OPTIONS_SUMMARY_URL,
         params={"currency": request.source_currency, "kind": "option"},
+        context="option summary",
+        json_getter=get_json,
     )
-    if not isinstance(payload, dict):
-        raise ValueError("Unexpected Deribit option summary response format")
-    result = payload.get("result")
-    if not isinstance(result, list):
-        raise ValueError("Unexpected Deribit option summary payload")
 
-    rows = [cast(dict[str, object], row) for row in result if isinstance(row, dict)]
     if request.instrument_prefix is None:
         return rows
     return [row for row in rows if str(row.get("instrument_name", "")).startswith(request.instrument_prefix)]

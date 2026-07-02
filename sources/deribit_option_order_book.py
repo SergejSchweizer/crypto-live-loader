@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import cast
 
 from ingestion.http_client import get_json
+from sources.deribit.public_api import deribit_public_result_mapping
 
 DERIBIT_OPTION_ORDER_BOOK_URL = "https://www.deribit.com/api/v2/public/get_order_book"
 DERIBIT_OPTION_ORDER_BOOK_SOURCE = "public/get_order_book"
@@ -19,15 +20,12 @@ def fetch_option_order_book(instrument_name: str, depth: int) -> dict[str, objec
     if depth <= 0:
         raise ValueError("depth must be positive")
 
-    payload = get_json(
+    result = deribit_public_result_mapping(
         DERIBIT_OPTION_ORDER_BOOK_URL,
         params={"instrument_name": normalized_instrument, "depth": depth},
+        context="option order-book",
+        json_getter=get_json,
     )
-    if not isinstance(payload, dict):
-        raise ValueError("Unexpected Deribit option order-book response format")
-    result = payload.get("result")
-    if not isinstance(result, dict):
-        raise ValueError("Unexpected Deribit option order-book payload")
     return cast(dict[str, object], result)
 
 
