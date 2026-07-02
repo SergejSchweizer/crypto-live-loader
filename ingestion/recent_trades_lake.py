@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
-from ingestion.parquet_repository import ParquetUpsertRepository
+from ingestion.lake_writer import upsert_partitioned_records
 from ingestion.recent_trades import RecentTradeSnapshotRow
 
 RecentTradePartitionKey = tuple[str, str, str, str, str, str, str, str, str]
@@ -97,10 +97,8 @@ def save_recent_trade_snapshot_parquet_lake(
 ) -> list[str]:
     """Upsert recent trade rows into hourly Bronze parquet files."""
 
-    repository = ParquetUpsertRepository()
-    grouped: defaultdict[RecentTradePartitionKey, list[dict[str, object]]] = defaultdict(list)
-    for row in rows:
-        key: RecentTradePartitionKey = (
+    def partition_key(row: RecentTradeSnapshotRow) -> RecentTradePartitionKey:
+        return (
             row.dataset_type,
             row.exchange,
             row.instrument_type,
@@ -111,18 +109,17 @@ def save_recent_trade_snapshot_parquet_lake(
             row.snapshot_time.strftime("%d"),
             row.snapshot_time.strftime("%H"),
         )
-        grouped[key].append(recent_trade_snapshot_record(row))
 
-    written_files: list[str] = []
-    for key, records in grouped.items():
-        file_path = recent_trade_partition_path(lake_root=lake_root, key=key) / "data.parquet"
-        written_files.append(
-            repository.upsert(
-                file_path=file_path,
-                records=records,
-                natural_key=lambda item: _natural_key(item),
-                sort_key=lambda item: _sort_key(item),
-                staging_name=f".staging-{records[0]['run_id']}.parquet",
-            )
-        )
-    return sorted(written_files)
+    return upsert_partitioned_records(
+        rows=rows,
+        lake_root=lake_root,
+        partition_key=partition_key,
+        partition_path=lambda root, key: recent_trade_partition_path(
+            lake_root=root,
+            key=cast(RecentTradePartitionKey, key),
+        ),
+        record_builder=recent_trade_snapshot_record,
+        natural_key=_natural_key,
+        sort_key=_sort_key,
+        staging_name=lambda records: f".staging-{records[0]['run_id']}.parquet",
+    )

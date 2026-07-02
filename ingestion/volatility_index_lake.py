@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections import defaultdict
 from datetime import datetime
 from pathlib import Path
+from typing import cast
 
-from ingestion.parquet_repository import ParquetUpsertRepository
+from ingestion.lake_writer import upsert_partitioned_records
 from ingestion.volatility_index import VolatilityIndexSnapshotRow
 
 VolatilityIndexPartitionKey = tuple[str, str, str, str, str, str, str, str]
@@ -74,10 +74,8 @@ def save_volatility_index_snapshot_parquet_lake(
 ) -> list[str]:
     """Upsert volatility-index rows into hourly Bronze parquet files."""
 
-    repository = ParquetUpsertRepository()
-    grouped: defaultdict[VolatilityIndexPartitionKey, list[dict[str, object]]] = defaultdict(list)
-    for row in rows:
-        key: VolatilityIndexPartitionKey = (
+    def partition_key(row: VolatilityIndexSnapshotRow) -> VolatilityIndexPartitionKey:
+        return (
             row.dataset_type,
             row.exchange,
             row.currency,
@@ -87,18 +85,17 @@ def save_volatility_index_snapshot_parquet_lake(
             row.snapshot_time.strftime("%d"),
             row.snapshot_time.strftime("%H"),
         )
-        grouped[key].append(volatility_index_snapshot_record(row))
 
-    written_files: list[str] = []
-    for key, records in grouped.items():
-        file_path = volatility_index_partition_path(lake_root=lake_root, key=key) / "data.parquet"
-        written_files.append(
-            repository.upsert(
-                file_path=file_path,
-                records=records,
-                natural_key=lambda item: _natural_key(item),
-                sort_key=lambda item: str(item["timestamp"]),
-                staging_name=f".staging-{records[0]['run_id']}.parquet",
-            )
-        )
-    return sorted(written_files)
+    return upsert_partitioned_records(
+        rows=rows,
+        lake_root=lake_root,
+        partition_key=partition_key,
+        partition_path=lambda root, key: volatility_index_partition_path(
+            lake_root=root,
+            key=cast(VolatilityIndexPartitionKey, key),
+        ),
+        record_builder=volatility_index_snapshot_record,
+        natural_key=_natural_key,
+        sort_key=lambda item: str(item["timestamp"]),
+        staging_name=lambda records: f".staging-{records[0]['run_id']}.parquet",
+    )
