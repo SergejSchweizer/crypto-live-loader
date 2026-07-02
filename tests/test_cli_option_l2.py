@@ -48,7 +48,7 @@ def _isolate_cli_test_logs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> N
 def _sample_row(instrument_name: str, depth: int = 20) -> OptionL2SnapshotRow:
     return OptionL2SnapshotRow(
         schema_version="v1",
-        dataset_type="option_l2_snapshot_1m",
+        dataset_type="options_l2_snapshot_1m",
         exchange="deribit",
         source="rest_get_order_book",
         currency=instrument_name.split("-", 1)[0].removesuffix("_USDC"),
@@ -143,7 +143,7 @@ def test_option_l2_cli_uses_explicit_instruments(
     output = json.loads(capsys.readouterr().out)
 
     assert output["command"] == OPTION_L2_BRONZE_BUILDER_COMMAND
-    assert output["dataset_type"] == "option_l2_snapshot_1m"
+    assert output["dataset_type"] == "options_l2_snapshot_1m"
     assert output["depth"] == 20
     assert output["instruments_requested"] == 1
     assert output["instruments_discovered"] == 1

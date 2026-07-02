@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import cast
 
-OPTION_L2_DATASET_TYPE = "option_l2_snapshot_1m"
+OPTION_L2_DATASET_TYPE = "options_l2_snapshot_1m"
 OPTION_L2_SCHEMA_VERSION = "v1"
 OPTION_L2_SOURCE = "rest_get_order_book"
 

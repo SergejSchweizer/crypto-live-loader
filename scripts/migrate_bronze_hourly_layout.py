@@ -20,6 +20,7 @@ SortKeyBuilder: TypeAlias = Callable[[ParquetRecord], SortableValue]
 BRONZE_DATASET_TIMESTAMP_COLUMNS: dict[str, str | None] = {
     "perp_l2_snapshot_1m": "event_time",
     "options_ticker_snapshot_1m": "snapshot_time",
+    "options_l2_snapshot_1m": "snapshot_time",
     "instrument_metadata_snapshot_daily": None,
     "index_price_snapshot_1m": "event_time",
 }
@@ -197,6 +198,14 @@ def _natural_key_builder(dataset_type: str) -> NaturalKeyBuilder:
             row["source"],
             row["snapshot_time"],
         )
+    if dataset_type == "options_l2_snapshot_1m":
+        return lambda row: (
+            row["exchange"],
+            row["instrument_name"],
+            row["source"],
+            row["depth"],
+            row["exchange_timestamp"],
+        )
     if dataset_type == "instrument_metadata_snapshot_daily":
         return lambda row: (row["exchange"], row["instrument_name"], row["snapshot_date"])
     if dataset_type == "index_price_snapshot_1m":
@@ -211,6 +220,8 @@ def _sort_key_builder(dataset_type: str) -> SortKeyBuilder:
         return lambda row: (
             f"{_datetime_sort_key(row, 'snapshot_time').isoformat()}|{row['currency']}|{row['instrument_name']}"
         )
+    if dataset_type == "options_l2_snapshot_1m":
+        return lambda row: f"{_datetime_sort_key(row, 'exchange_timestamp').isoformat()}|{row['instrument_name']}"
     if dataset_type == "instrument_metadata_snapshot_daily":
         return lambda row: str(row["instrument_name"])
     if dataset_type == "index_price_snapshot_1m":

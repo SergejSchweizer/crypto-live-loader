@@ -13,6 +13,7 @@ COMMAND_LOG_SCOPES = {
     "perp-l2-bronze-builder": "l2",
     "l2-bronze-builder": "l2",
     "bronze-builder": "l2",
+    "options-l2-bronze-builder": "option_l2",
     "option-l2-bronze-builder": "option_l2",
     "option-instrument-ticker-bronze-builder": "option_instrument_ticker",
     "options-bronze-builder": "options",

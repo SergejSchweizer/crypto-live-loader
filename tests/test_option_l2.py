@@ -42,7 +42,7 @@ def test_option_l2_normalizes_book_iv_stats_and_greeks() -> None:
     )
 
     assert errors == []
-    assert rows[0].dataset_type == "option_l2_snapshot_1m"
+    assert rows[0].dataset_type == "options_l2_snapshot_1m"
     assert rows[0].currency == "SOL"
     assert rows[0].depth == 20
     assert rows[0].fetch_duration_s == 0.123

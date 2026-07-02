@@ -18,6 +18,7 @@ from api.constants import (
     INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND,
     LEGACY_BRONZE_BUILDER_COMMAND,
     LEGACY_L2_BRONZE_BUILDER_COMMAND,
+    LEGACY_OPTION_L2_BRONZE_BUILDER_COMMAND,
     OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND,
     OPTION_L2_BRONZE_BUILDER_COMMAND,
     OPTIONS_BRONZE_BUILDER_COMMAND,
@@ -383,6 +384,7 @@ def build_parser(config: Config | None = None) -> argparse.ArgumentParser:
     option_l2_config = config_section(ingestion_config, "option_l2")
     option_l2_parser = subparsers.add_parser(
         OPTION_L2_BRONZE_BUILDER_COMMAND,
+        aliases=[LEGACY_OPTION_L2_BRONZE_BUILDER_COMMAND],
         help="Fetch Deribit selected option order-book snapshots into the bronze parquet lake",
     )
     option_l2_parser.add_argument(
@@ -2454,6 +2456,7 @@ def command_handlers() -> dict[str, CommandHandler]:
         OPTIONS_BRONZE_BUILDER_COMMAND: _handle_options_bronze_builder,
         FUTURES_SUMMARY_BRONZE_BUILDER_COMMAND: _handle_futures_summary_bronze_builder,
         OPTION_L2_BRONZE_BUILDER_COMMAND: _handle_option_l2_bronze_builder,
+        LEGACY_OPTION_L2_BRONZE_BUILDER_COMMAND: _handle_option_l2_bronze_builder,
         OPTION_INSTRUMENT_TICKER_BRONZE_BUILDER_COMMAND: _handle_option_instrument_ticker_bronze_builder,
         INSTRUMENT_METADATA_BRONZE_BUILDER_COMMAND: _handle_instrument_metadata_bronze_builder,
         INDEX_PRICE_BRONZE_BUILDER_COMMAND: _handle_index_price_bronze_builder,

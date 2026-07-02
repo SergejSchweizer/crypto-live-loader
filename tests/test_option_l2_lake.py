@@ -16,7 +16,7 @@ def _sample_row(raw_payload_hash: str = "abc") -> OptionL2SnapshotRow:
     snapshot_time = datetime(2026, 5, 24, 7, 15, tzinfo=UTC)
     return OptionL2SnapshotRow(
         schema_version="v1",
-        dataset_type="option_l2_snapshot_1m",
+        dataset_type="options_l2_snapshot_1m",
         exchange="deribit",
         source="rest_get_order_book",
         currency="BTC",
@@ -70,7 +70,7 @@ def test_option_l2_partition_path() -> None:
     result = option_l2_partition_path(
         "lake/bronze",
         (
-            "option_l2_snapshot_1m",
+            "options_l2_snapshot_1m",
             "deribit",
             "option",
             "BTC",
@@ -85,7 +85,7 @@ def test_option_l2_partition_path() -> None:
     )
 
     assert str(result).endswith(
-        "dataset_type=option_l2_snapshot_1m/exchange=deribit/instrument_type=option/currency=BTC/"
+        "dataset_type=options_l2_snapshot_1m/exchange=deribit/instrument_type=option/currency=BTC/"
         "instrument_name=BTC-30JUN26-120000-C/depth=20/source=rest_get_order_book/year=2026/month=05/"
         "date=24/hour=07"
     )
