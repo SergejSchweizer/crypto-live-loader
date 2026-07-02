@@ -26,7 +26,7 @@ Author: Sergej Schweizer
   - [4.1 Perpetual L2 Order Book (`dataset_type=perp_l2_snapshot_1m`)](#41-perpetual-l2-order-book-dataset_typeperp_l2_snapshot_1m)
   - [4.2 Options Summary (`dataset_type=options_ticker_snapshot_1m`)](#42-options-summary-dataset_typeoptions_ticker_snapshot_1m)
   - [4.3 Option Instrument Ticker (`dataset_type=option_instrument_ticker_snapshot_1m`)](#43-option-instrument-ticker-dataset_typeoption_instrument_ticker_snapshot_1m)
-  - [4.4 Option L2 Order Book (`dataset_type=option_l2_snapshot_1m`)](#44-option-l2-order-book-dataset_typeoption_l2_snapshot_1m)
+  - [4.4 Option L2 Order Book (`dataset_type=options_l2_snapshot_1m`)](#44-option-l2-order-book-dataset_typeoptions_l2_snapshot_1m)
   - [4.5 Instrument Metadata (`dataset_type=instrument_metadata_snapshot_daily`)](#45-instrument-metadata-dataset_typeinstrument_metadata_snapshot_daily)
   - [4.6 Index Price (`dataset_type=index_price_snapshot_1m`)](#46-index-price-dataset_typeindex_price_snapshot_1m)
   - [4.7 Volatility Index (`dataset_type=volatility_index_snapshot_1m`)](#47-volatility-index-dataset_typevolatility_index_snapshot_1m)
@@ -106,7 +106,7 @@ Options:
 |---|---|---|---|---|---|
 | `options-bronze-builder` | `options_ticker_snapshot_1m` | `option` | `BTC ETH SOL` | `public/get_book_summary_by_currency` | Broad option-chain summary rows |
 | `option-instrument-ticker-bronze-builder` | `option_instrument_ticker_snapshot_1m` | `option` | `BTC ETH SOL` | `public/ticker` | Selected per-option IV, bid/ask IV, and Greeks |
-| `option-l2-bronze-builder` | `option_l2_snapshot_1m` | `option` | `BTC ETH SOL` | `public/get_order_book` | Selected per-option bid/ask depth and top-of-book IV context |
+| `options-l2-bronze-builder` | `options_l2_snapshot_1m` | `option` | `BTC ETH SOL` | `public/get_order_book` | Selected per-option bid/ask depth and top-of-book IV context |
 | `futures-summary-bronze-builder` | `futures_summary_snapshot_1m` | `future`, `perp` | `BTC ETH SOL` | `public/get_book_summary_by_currency` | Dated futures and perpetual curve summary rows |
 | `recent-trades-bronze-builder` | `recent_trade_snapshot_1m` | `option`, `future`, `perp` | `BTC ETH SOL` | `public/get_last_trades_by_currency` | Recent trade tape for options, futures, and perpetuals |
 | `instrument-metadata-bronze-builder` | `instrument_metadata_snapshot_daily`, `future_instrument_metadata_snapshot_daily` | `option`, `future` | `BTC ETH SOL` | `public/get_instruments` | Active instrument metadata snapshots |
@@ -236,7 +236,7 @@ python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL 
 python main.py options-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
 python main.py futures-summary-bronze-builder --debug --symbols BTC ETH SOL
 python main.py option-instrument-ticker-bronze-builder --debug --symbols BTC ETH SOL --max-instruments-per-run 60
-python main.py option-l2-bronze-builder --debug --symbols BTC ETH SOL --depth 20 --max-instruments-per-run 60
+python main.py options-l2-bronze-builder --debug --symbols BTC ETH SOL --depth 20 --max-instruments-per-run 60
 python main.py recent-trades-bronze-builder --debug --symbols BTC ETH SOL --kinds option future --count 1000
 python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
 python main.py volatility-index-bronze-builder --debug --symbols BTC ETH SOL --resolution 60
@@ -261,6 +261,10 @@ timestamps are preserved as the natural event or snapshot time.
 
 Market role: raw perpetual order-book depth for spread, imbalance, microstructure, and realized
 volatility context.
+
+Canonical dataset name: `perp_l2_snapshot_1m`. Historical Bronze directories named
+`dataset_type=l2_snapshot` or `dataset_type=perp_l2_snapshot` are deprecated and must be migrated
+into `dataset_type=perp_l2_snapshot_1m` before downstream reads.
 
 Endpoint: `GET /api/v2/public/get_order_book`
 
@@ -402,7 +406,7 @@ Metadata join fields:
 | `contract_size`, `tick_size`, `min_trade_amount` | Tradability, notional interpretation, and liquidity filters |
 | `price_index`, `is_active`, `state` | Underlying reference and stale-contract filtering |
 
-## 4.4 Option L2 Order Book (`dataset_type=option_l2_snapshot_1m`)
+## 4.4 Option L2 Order Book (`dataset_type=options_l2_snapshot_1m`)
 
 ### 1. Bronze Layer
 
@@ -414,7 +418,7 @@ Endpoint: `GET /api/v2/public/get_order_book?instrument_name=<option instrument>
 Default command:
 
 ```bash
-python main.py option-l2-bronze-builder --debug --symbols BTC ETH SOL --depth 20 --max-instruments-per-run 60
+python main.py options-l2-bronze-builder --debug --symbols BTC ETH SOL --depth 20 --max-instruments-per-run 60
 ```
 
 Selection policy:
@@ -429,7 +433,7 @@ Coverage contract:
 
 | Item | Contract |
 |---|---|
-| Target dataset | `option_l2_snapshot_1m` |
+| Target dataset | `options_l2_snapshot_1m` |
 | Live endpoint owner | `crypto-live-loader` only |
 | Assets | BTC, ETH, SOL |
 | SOL endpoint mapping | Fetch Deribit `USDC` option summaries and keep `SOL_USDC-*` instruments |
@@ -646,7 +650,7 @@ lake/bronze/
     exchange=<exchange>/instrument_type=option/currency=<currency>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
   dataset_type=option_instrument_ticker_snapshot_1m/
     exchange=<exchange>/instrument_type=option/currency=<currency>/instrument_name=<instrument_name>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
-  dataset_type=option_l2_snapshot_1m/
+  dataset_type=options_l2_snapshot_1m/
     exchange=<exchange>/instrument_type=option/currency=<currency>/instrument_name=<instrument_name>/depth=<depth>/source=<source>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
   dataset_type=instrument_metadata_snapshot_daily/
     exchange=<exchange>/year=YYYY/month=MM/date=DD/hour=HH/data.parquet
@@ -664,6 +668,10 @@ lake/bronze/
 
 Partitioning uses explicit `year=YYYY/month=MM/date=DD/hour=HH` directories. Writers upsert into one
 `data.parquet` file per partition.
+
+Perpetual L2 readers and jobs should only use `dataset_type=perp_l2_snapshot_1m`. Legacy
+`dataset_type=l2_snapshot` and `dataset_type=perp_l2_snapshot` paths are historical aliases, not
+valid active Bronze roots.
 
 ---
 
@@ -717,7 +725,7 @@ python main.py perp-l2-bronze-builder --debug --symbols BTC ETH SOL --save-parqu
 python main.py options-bronze-builder --debug --symbols BTC ETH SOL --save-parquet-lake
 python main.py futures-summary-bronze-builder --debug --symbols BTC ETH SOL
 python main.py option-instrument-ticker-bronze-builder --debug --symbols BTC ETH SOL --max-instruments-per-run 60
-python main.py option-l2-bronze-builder --debug --symbols BTC ETH SOL --depth 20 --max-instruments-per-run 60
+python main.py options-l2-bronze-builder --debug --symbols BTC ETH SOL --depth 20 --max-instruments-per-run 60
 python main.py recent-trades-bronze-builder --debug --symbols BTC ETH SOL --kinds option future --count 1000
 python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind option
 python main.py instrument-metadata-bronze-builder --debug --symbols BTC ETH SOL --kind future
@@ -738,7 +746,7 @@ python main.py validate-symbols --debug --symbols BTC ETH SOL
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py options-bronze-builder --debug --symbols BTC ETH SOL
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py futures-summary-bronze-builder --debug --symbols BTC ETH SOL
 * * * * * cd /home/vcs/git/crypto-live-loader && flock -n .logs/option-instrument-ticker-bronze-builder.cron.lock .venv/bin/python main.py option-instrument-ticker-bronze-builder --debug --symbols BTC ETH SOL --max-instruments-per-run 60
-* * * * * cd /home/vcs/git/crypto-live-loader && flock -n .logs/option-l2-bronze-builder.cron.lock .venv/bin/python main.py option-l2-bronze-builder --debug --symbols BTC ETH SOL --depth 20 --max-instruments-per-run 60
+* * * * * cd /home/vcs/git/crypto-live-loader && flock -n .logs/options-l2-bronze-builder.cron.lock .venv/bin/python main.py options-l2-bronze-builder --debug --symbols BTC ETH SOL --depth 20 --max-instruments-per-run 60
 * * * * * cd /home/vcs/git/crypto-live-loader && flock -n .logs/recent-trades-bronze-builder.cron.lock .venv/bin/python main.py recent-trades-bronze-builder --debug --symbols BTC ETH SOL --kinds option future --count 1000
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py index-price-bronze-builder --debug --symbols btc_usd eth_usd sol_usdc
 * * * * * cd /home/vcs/git/crypto-live-loader && .venv/bin/python main.py volatility-index-bronze-builder --debug --symbols BTC ETH SOL --resolution 60
@@ -795,7 +803,7 @@ Upsert-based datasets merge by natural keys and deterministic sort order:
 | `perp_l2_snapshot_1m` | `exchange`, `instrument_type`, `symbol`, `depth`, `source`, `event_time` |
 | `options_ticker_snapshot_1m` | `exchange`, `currency`, `instrument_name`, `source`, `snapshot_time` |
 | `option_instrument_ticker_snapshot_1m` | `exchange`, `instrument_name`, `source`, `snapshot_time` |
-| `option_l2_snapshot_1m` | `exchange`, `instrument_name`, `source`, `depth`, `exchange_timestamp` |
+| `options_l2_snapshot_1m` | `exchange`, `instrument_name`, `source`, `depth`, `exchange_timestamp` |
 | `instrument_metadata_snapshot_daily` | `exchange`, `instrument_name`, `snapshot_date` |
 | `future_instrument_metadata_snapshot_daily` | `exchange`, `instrument_name`, `snapshot_date` |
 | `index_price_snapshot_1m` | `exchange`, `index_name`, `event_time`, `source` |
